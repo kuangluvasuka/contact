@@ -1,0 +1,9 @@
+.idea
+.DS_Store
+__pycache__
+*.ipynb
+.ipynb_checkpoints/*
+dataset/*
+checkpoints/*
+tf_logs/*
+papers/*

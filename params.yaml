@@ -1,0 +1,31 @@
+######
+data_folder: './dataset/proteinnet/'
+bucket_boundaries: [117, 215, 313, 411, 509, 607, 705, 803, 901]
+batch_size: 20
+test_batch_size: 10
+shuffle: True
+max_protein_length: 600
+
+pretrained: None
+
+embedding_units: 10
+embedding_dim: 20
+
+
+lstm_units: 64
+lstm_stacks: 2
+bidirectional: True
+
+
+fc_dims: [32, 20]
+filters: 1
+kernel_size: 7
+
+learning_rate: 1.0e-4
+epochs: 50
+
+
+checkpoint_dir: './checkpoints'
+checkpoint_inteval: 20
+resume_training: False
+summary_dir: './tf_logs'
