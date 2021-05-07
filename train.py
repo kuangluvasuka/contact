@@ -87,9 +87,13 @@ def evaluate(model: tf.keras.Model,
     logits = model(data_dict['primary'])
     preds = [convert_contact_map(x) for x in logits.numpy()]
     trues = [x for x in data_dict['contact_map'].numpy()]    # convert from array(B, N, N) to list of arr(N, N)
+    valid_mask = data_dict['valid_mask'].numpy()
+    masks = np.expand_dims(valid_mask, 1) * np.expand_dims(valid_mask, 2)
+    masked_preds = [np.multiply(x, y) for x, y in zip(masks, preds)]
+    masked_trues = [np.multiply(x, y) for x, y in zip(masks, trues)]
 
-    contact_preds.extend(preds)
-    contact_trues.extend(trues)
+    contact_preds.extend(masked_preds)
+    contact_trues.extend(masked_trues)
 
   partitioned_preds = [partition_contacts(x) for x in contact_preds]
   partitioned_trues = [partition_contacts(x) for x in contact_trues]
@@ -99,7 +103,7 @@ def evaluate(model: tf.keras.Model,
 
   precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5 = collect_metrics(short_trues, short_preds)
 
-  return list(map(np.mean, [precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5]))
+  return list(map(np.mean, [precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5])), contact_preds, contact_trues
 
 
 
