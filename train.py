@@ -103,7 +103,7 @@ def evaluate(model: tf.keras.Model,
 
   precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5 = collect_metrics(short_trues, short_preds)
 
-  return list(map(np.mean, [precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5])), contact_preds, contact_trues
+  return list(map(np.mean, [precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5]))
 
 
 
