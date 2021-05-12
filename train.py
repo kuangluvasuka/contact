@@ -47,7 +47,7 @@ def _train_on_step(model: tf.keras.Model,
 
   with tf.GradientTape() as tape:
     logits = model(inputs['primary'])
-    loss = loss_fn(inputs['contact_map'], logits, inputs['valid_mask'])
+    loss = loss_fn(inputs['contact_map'], logits, inputs['mask_2D'])
   grads = tape.gradient(loss, model.trainable_variables)
   optimizer.apply_gradients(zip(grads, model.trainable_variables))
   return loss
@@ -59,14 +59,16 @@ def _train_off_step(model: tf.keras.Model,
                     loss_fn: Callable) -> tf.Tensor:
 
   logits = model(inputs['primary'])
-  loss = loss_fn(inputs['contact_map'], logits, inputs['valid_mask'])
+  loss = loss_fn(inputs['contact_map'], logits, inputs['mask_2D'])
   return loss
 
 
-def masked_weighted_cross_entropy(y_true: tf.Tensor,
+def masked_weighted_cross_entropy(y_trues: tf.Tensor,
                                   logits: tf.Tensor,
-                                  mask: tf.Tensor) -> tf.Tensor:
+                                  masks: tf.Tensor) -> tf.Tensor:
 
+  loss = tf.nn.weighted_cross_entropy_with_logits(y_trues, logits, pos_weight=1)
+  masked_loss = tf.multiply(loss, masks)
   loss = tf.nn.weighted_cross_entropy_with_logits(y_true, logits, pos_weight=1)
   mask_2d = tf.multiply(tf.expand_dims(mask, axis=2), tf.expand_dims(mask, axis=1))
   masked_loss = tf.multiply(loss, mask_2d)
@@ -87,8 +89,7 @@ def evaluate(model: tf.keras.Model,
     logits = model(data_dict['primary'])
     preds = [convert_contact_map(x) for x in logits.numpy()]
     trues = [x for x in data_dict['contact_map'].numpy()]    # convert from array(B, N, N) to list of arr(N, N)
-    valid_mask = data_dict['valid_mask'].numpy()
-    masks = np.expand_dims(valid_mask, 1) * np.expand_dims(valid_mask, 2)
+    masks = data_dict['mask_2D'].numpy()
     masked_preds = [np.multiply(x, y) for x, y in zip(masks, preds)]
     masked_trues = [np.multiply(x, y) for x, y in zip(masks, trues)]
 
