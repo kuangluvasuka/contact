@@ -46,7 +46,7 @@ class Feeder():
 
     dataset = tf.data.TFRecordDataset(data_files)
     dataset = dataset.map(self._tf_parse_func, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-    dataset = dataset.filter(lambda d: d['protein_length'] < self.max_protein_length)
+    dataset = dataset.filter(lambda d: d['protein_length'] <= self.max_protein_length)
     dataset = dataset.shuffle(1024) if shuffle else dataset.prefetch(1024)
 
     if bucket_batch:
