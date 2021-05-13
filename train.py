@@ -75,16 +75,6 @@ def masked_weighted_cross_entropy(y_trues: tf.Tensor,
   length = loss.shape[1]
   weighted_loss = tf.multiply(masked_loss, weight[: length, : length])
 
-  #w = [0.4, 5, 2, 1.15]
-
-  #adjacent = tf.reduce_sum(tf.linalg.diag_part(masked_loss, k=(0, 5))) * w[0]
-  #short_ = tf.reduce_sum(tf.linalg.diag_part(masked_loss, k=(6, 11))) * w[1]
-  #medium = tf.reduce_sum(tf.linalg.diag_part(masked_loss, k=(12, min(length, 23)))) * w[2]
-  #long_ = 0
-  #if length > 24:
-  #  long_ = tf.reduce_sum(tf.linalg.diag_part(masked_loss, k=(24, length - 1))) * w[3]
-
-  #return adjacent + short_ + medium + long_
   return tf.reduce_sum(weighted_loss)
 
 
