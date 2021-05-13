@@ -5,6 +5,7 @@ batch_size: 20
 test_batch_size: 10
 shuffle: True
 max_protein_length: 600
+range_weights: [0.2, 6, 2, 1.5]
 
 pretrained: None
 
@@ -21,8 +22,7 @@ fc_dims: [32, 20]
 filters: 1
 kernel_size: 7
 
-learning_rate: 1.0e-4
-epochs: 50
+learning_rate: 1.0e-3
 
 
 checkpoint_dir: './checkpoints'

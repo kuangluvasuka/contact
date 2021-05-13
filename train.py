@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Union, Dict, Callable, Tuple
+from typing import Union, List, Dict, Callable, Tuple
 
 import numpy as np
 import tensorflow as tf
@@ -43,11 +43,12 @@ def configure_summary(summary_dir: Union[str, None]) -> Dict:
 def _train_on_step(model: tf.keras.Model,
                    inputs: Dict,
                    loss_fn: Callable,
-                   optimizer: tf.keras.optimizers.Optimizer) -> tf.Tensor:
+                   optimizer: tf.keras.optimizers.Optimizer,
+                   range_wt_mat: tf.Tensor) -> tf.Tensor:
 
   with tf.GradientTape() as tape:
     logits = model(inputs['primary'])
-    loss = loss_fn(inputs['contact_map'], logits, inputs['mask_2D'])
+    loss = loss_fn(inputs['contact_map'], logits, inputs['mask_2D'], range_wt_mat)
   grads = tape.gradient(loss, model.trainable_variables)
   optimizer.apply_gradients(zip(grads, model.trainable_variables))
   return loss
@@ -56,23 +57,52 @@ def _train_on_step(model: tf.keras.Model,
 #@tf.function
 def _train_off_step(model: tf.keras.Model,
                     inputs: Dict,
-                    loss_fn: Callable) -> tf.Tensor:
+                    loss_fn: Callable,
+                    range_wt_mat: tf.Tensor) -> tf.Tensor:
 
   logits = model(inputs['primary'])
-  loss = loss_fn(inputs['contact_map'], logits, inputs['mask_2D'])
+  loss = loss_fn(inputs['contact_map'], logits, inputs['mask_2D'], range_wt_mat)
   return loss
 
 
 def masked_weighted_cross_entropy(y_trues: tf.Tensor,
                                   logits: tf.Tensor,
-                                  masks: tf.Tensor) -> tf.Tensor:
+                                  masks: tf.Tensor,
+                                  weight) -> tf.Tensor:
 
   loss = tf.nn.weighted_cross_entropy_with_logits(y_trues, logits, pos_weight=1)
   masked_loss = tf.multiply(loss, masks)
-  loss = tf.nn.weighted_cross_entropy_with_logits(y_true, logits, pos_weight=1)
-  mask_2d = tf.multiply(tf.expand_dims(mask, axis=2), tf.expand_dims(mask, axis=1))
-  masked_loss = tf.multiply(loss, mask_2d)
-  return tf.reduce_sum(masked_loss)
+  length = loss.shape[1]
+  weighted_loss = tf.multiply(masked_loss, weight[: length, : length])
+
+  #w = [0.4, 5, 2, 1.15]
+
+  #adjacent = tf.reduce_sum(tf.linalg.diag_part(masked_loss, k=(0, 5))) * w[0]
+  #short_ = tf.reduce_sum(tf.linalg.diag_part(masked_loss, k=(6, 11))) * w[1]
+  #medium = tf.reduce_sum(tf.linalg.diag_part(masked_loss, k=(12, min(length, 23)))) * w[2]
+  #long_ = 0
+  #if length > 24:
+  #  long_ = tf.reduce_sum(tf.linalg.diag_part(masked_loss, k=(24, length - 1))) * w[3]
+
+  #return adjacent + short_ + medium + long_
+  return tf.reduce_sum(weighted_loss)
+
+
+def get_range_weighted_matrix(range_wt: List, max_len: int) -> tf.Tensor:
+  """
+  Create a weighted symmetric matrix for close-short-medium-long range of contacts.
+  The range is defined as: 0~5, 6~11, 12~23, 24~max
+  Note: max_len > 24
+  """
+  mat = np.zeros([max_len, max_len])
+  row = np.array([range_wt[0]] * 6 + [range_wt[1]] * 6 + [range_wt[2]] * 12 + [range_wt[3]] * (max_len - 24))
+  for i in range(max_len):
+    mat[i] = row
+    row = np.roll(row, shift=1)
+    row[0] = 0
+  res = mat + mat.T
+  np.fill_diagonal(res, range_wt[0])
+  return tf.constant(res, dtype=tf.float32)
 
 
 def evaluate(model: tf.keras.Model,
@@ -113,6 +143,7 @@ def train(model: tf.keras.Model,
           hparams: Dict) -> None:
 
   hp = hparams
+  range_weighted_mat = get_range_weighted_matrix(hp['range_weights'], hp['max_protein_length'])
   loss_fn = masked_weighted_cross_entropy
   optimizer = tf.optimizers.Adam(learning_rate=hp['learning_rate'])
   ckpt_obj, ckpt_mgr = configure_checkpoint(model, optimizer, hp['checkpoint_dir'], hp['resume_training'])
@@ -128,7 +159,7 @@ def train(model: tf.keras.Model,
         ckpt_obj.step.assign_add(1)
         # TODO: add summary_step?
         with tf.summary.record_if(i == 0):
-          loss = _train_on_step(model, data_dict, loss_fn, optimizer)
+          loss = _train_on_step(model, data_dict, loss_fn, optimizer, range_weighted_mat)
         losses.append(loss.numpy())
       train_loss_average = np.mean(losses) / hp['batch_size']
       tf.summary.scalar('loss', train_loss_average)
@@ -137,7 +168,7 @@ def train(model: tf.keras.Model,
     with summary_writer['valid'].as_default():
       for (i, data_dict) in enumerate(feeder.valid):
         with tf.summary.record_if(i == 0):
-          loss = _train_off_step(model, data_dict, loss_fn)
+          loss = _train_off_step(model, data_dict, loss_fn, range_weighted_mat)
         losses.append(loss.numpy())
       valid_loss_average = np.mean(losses) / hp['test_batch_size']
       tf.summary.scalar('loss', valid_loss_average)
