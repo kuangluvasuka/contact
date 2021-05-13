@@ -23,6 +23,7 @@ filters: 1
 kernel_size: 7
 
 learning_rate: 1.0e-3
+epochs: 200
 
 
 checkpoint_dir: './checkpoints'
