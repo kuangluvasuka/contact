@@ -75,7 +75,7 @@ def masked_weighted_cross_entropy(y_trues: tf.Tensor,
   length = loss.shape[1]
   weighted_loss = tf.multiply(masked_loss, weight[: length, : length])
 
-  return tf.reduce_sum(weighted_loss)
+  return tf.reduce_sum(tf.reduce_mean(weighted_loss, axis=0))
 
 
 def get_range_weighted_matrix(range_wt: List, max_len: int) -> tf.Tensor:
