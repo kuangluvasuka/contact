@@ -176,8 +176,8 @@ def train(model: tf.keras.Model,
         epoch, train_loss_average, time.time() - start, valid_loss_average))
 
 
-    #if epoch % hp['checkpoint_inteval'] == 0:
-    #  ckpt_mgr.save()
+    if epoch % hp['checkpoint_inteval'] == 0:
+      ckpt_mgr.save()
     #  #save_path = ckpt_mgr.save()
     #  #print("Saved checkpoint for epoch {} at {}".format(epoch, save_path))
 
