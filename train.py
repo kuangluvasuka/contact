@@ -21,7 +21,7 @@ def configure_checkpoint(model: tf.Tensor,
       optimizer=optimizer)
   manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep=3)
   if resume_training:
-    checkpoint.restore(manager.latest_checkpoint).assert_consumed()
+    checkpoint.restore(manager.latest_checkpoint).assert_existing_objects_matched()
     print("Checkpoint restored from {}.".format(manager.latest_checkpoint))
   else:
     print("Initializing checkpoint object at {}.".format(checkpoint_dir))
@@ -177,9 +177,8 @@ def train(model: tf.keras.Model,
 
 
     if epoch % hp['checkpoint_inteval'] == 0:
-      ckpt_mgr.save()
-    #  #save_path = ckpt_mgr.save()
-    #  #print("Saved checkpoint for epoch {} at {}".format(epoch, save_path))
+      save_path = ckpt_mgr.save()
+      print("Saved checkpoint for epoch {}: {}".format(epoch, save_path))
 
 
 
