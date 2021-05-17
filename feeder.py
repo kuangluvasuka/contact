@@ -1,6 +1,6 @@
 import os
 from glob import glob
-from typing import Tuple, List, Dict, Callable
+from typing import List, Dict, Union, Callable
 import tensorflow as tf
 
 
@@ -13,6 +13,7 @@ class Feeder():
                test_batch_size: int,
                bucket_boundaries: List[int],
                tf_parse_func: Callable[[bytes], Dict[str, tf.Tensor]],
+               distribute_strategy: Union[tf.distribute.Strategy, None],
                shuffle: bool = False,
                max_protein_length: int = 1000):
 
@@ -23,8 +24,24 @@ class Feeder():
     self.shuffle = shuffle
     self.max_protein_length = max_protein_length
 
-    self.train, self.valid = self._get_data_loader(data_folder)
-    self.test = self._get_test_loader(data_folder)
+    self._build_data_loader(data_folder, distribute_strategy)
+
+  def _build_data_loader(self, data_folder: str,
+                         strategy: Union[tf.distribute.Strategy, None]) -> None:
+    train_files = self._get_data_files(data_folder, 'train')
+    valid_files = self._get_data_files(data_folder, 'valid')
+    test_files = self._get_data_files(data_folder, 'test')
+
+    if strategy is not None:
+      train_loader = self._build(train_files, self.batch_size, shuffle=self.shuffle,
+                                 bucket_batch=True, drop_remainder=True)
+      valid_loader = self._build(valid_files, self.test_batch_size, drop_remainder=True)
+      self.train = strategy.experimental_distribute_dataset(train_loader)
+      self.valid = strategy.experimental_distribute_dataset(valid_loader)
+    else:
+      self.train = self._build(train_files, self.batch_size, shuffle=self.shuffle, bucket_batch=True)
+      self.valid = self._build(valid_files, self.test_batch_size)
+    self.test = self._build(test_files, self.test_batch_size)
 
   def _get_data_files(self,
                       data_folder: str,
@@ -38,11 +55,12 @@ class Feeder():
 
     return data_files
 
-  def _build_data_loader(self,
-                         data_files: List[str],
-                         batch_size: int,
-                         shuffle: bool,
-                         bucket_batch: bool = False) -> tf.data.Dataset:
+  def _build(self,
+             data_files: List[str],
+             batch_size: int,
+             shuffle: bool = False,
+             bucket_batch: bool = False,
+             drop_remainder=False) -> tf.data.Dataset:
 
     dataset = tf.data.TFRecordDataset(data_files)
     dataset = dataset.map(self._tf_parse_func, num_parallel_calls=tf.data.experimental.AUTOTUNE)
@@ -54,24 +72,10 @@ class Feeder():
       batch_func = tf.data.experimental.bucket_by_sequence_length(
           lambda d: d['protein_length'],
           self.bucket_boundaries,
-          batch_size)
+          batch_size,
+          drop_remainder=drop_remainder)
       dataset = dataset.apply(batch_func)
     else:
-      dataset = dataset.padded_batch(batch_size)
+      dataset = dataset.padded_batch(batch_size, drop_remainder=drop_remainder)
 
     return dataset
-
-  def _get_data_loader(self, data_folder: str) -> Tuple[tf.data.Dataset, tf.data.Dataset]:
-    train_files = self._get_data_files(data_folder, 'train')
-    valid_files = self._get_data_files(data_folder, 'valid')
-
-    train_data = self._build_data_loader(train_files, self.batch_size, shuffle=self.shuffle, bucket_batch=True)
-    valid_data = self._build_data_loader(valid_files, self.test_batch_size, shuffle=False)
-
-    return train_data, valid_data
-
-  def _get_test_loader(self, data_folder: str) -> tf.data.Dataset:
-    test_files = self._get_data_files(data_folder, 'test')
-    test_data = self._build_data_loader(test_files, self.test_batch_size, shuffle=False)
-
-    return test_data
