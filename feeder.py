@@ -67,15 +67,23 @@ class Feeder():
     dataset = dataset.filter(lambda d: d['protein_length'] <= self.max_protein_length)
     dataset = dataset.shuffle(1024) if shuffle else dataset.prefetch(1024)
 
+    #pad_shapes = {'id': [],
+    #              'primary': [self.max_protein_length],
+    #              'contact_map': [self.max_protein_length, self.max_protein_length],
+    #              'evolutionary': [self.max_protein_length, 21],    # 21 is the number of Evolutionary Entries
+    #              'protein_length': [],
+    #              'mask_2D': [self.max_protein_length, self.max_protein_length]}
+
     if bucket_batch:
       batch_size = [batch_size] * (len(self.bucket_boundaries) + 1)
       batch_func = tf.data.experimental.bucket_by_sequence_length(
           lambda d: d['protein_length'],
           self.bucket_boundaries,
           batch_size,
+          #padded_shapes=pad_shapes,
           drop_remainder=drop_remainder)
       dataset = dataset.apply(batch_func)
     else:
-      dataset = dataset.padded_batch(batch_size, drop_remainder=drop_remainder)
+      dataset = dataset.padded_batch(batch_size, drop_remainder=drop_remainder) #, padded_shapes=pad_shapes)
 
     return dataset

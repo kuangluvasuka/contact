@@ -14,12 +14,11 @@ def configure_checkpoint(model: tf.Tensor,
                          checkpoint_dir: str,
                          resume_training: bool = False) -> Tuple[tf.train.Checkpoint, tf.train.CheckpointManager]:
 
-  checkpoint = tf.train.Checkpoint(
-      epoch=tf.Variable(1),
-      step=tf.Variable(1),
-      model=model,
-      optimizer=optimizer)
-  manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep=3)
+  checkpoint = tf.train.Checkpoint(epoch=tf.Variable(1),
+                                   step=tf.Variable(1),
+                                   model=model,
+                                   optimizer=optimizer)
+  manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep=5)
   if resume_training:
     checkpoint.restore(manager.latest_checkpoint).assert_existing_objects_matched()
     print("Checkpoint restored from {}.".format(manager.latest_checkpoint))
@@ -43,12 +42,11 @@ def configure_summary(summary_dir: Union[str, None]) -> Dict:
 def _train_on_step(model: tf.keras.Model,
                    inputs: Dict,
                    loss_fn: Callable,
-                   optimizer: tf.keras.optimizers.Optimizer,
-                   range_wt_mat: tf.Tensor) -> tf.Tensor:
+                   optimizer: tf.keras.optimizers.Optimizer) -> tf.Tensor:
 
   with tf.GradientTape() as tape:
     logits = model(inputs['primary'])
-    loss = loss_fn(inputs['contact_map'], logits, inputs['mask_2D'], range_wt_mat)
+    loss = loss_fn(inputs['contact_map'], logits, inputs['mask_2D'])
   grads = tape.gradient(loss, model.trainable_variables)
   optimizer.apply_gradients(zip(grads, model.trainable_variables))
   return loss
@@ -57,25 +55,38 @@ def _train_on_step(model: tf.keras.Model,
 #@tf.function
 def _train_off_step(model: tf.keras.Model,
                     inputs: Dict,
-                    loss_fn: Callable,
-                    range_wt_mat: tf.Tensor) -> tf.Tensor:
+                    loss_fn: Callable) -> tf.Tensor:
 
   logits = model(inputs['primary'])
-  loss = loss_fn(inputs['contact_map'], logits, inputs['mask_2D'], range_wt_mat)
+  loss = loss_fn(inputs['contact_map'], logits, inputs['mask_2D'])
   return loss
 
 
-def masked_weighted_cross_entropy(y_trues: tf.Tensor,
-                                  logits: tf.Tensor,
-                                  masks: tf.Tensor,
-                                  weight) -> tf.Tensor:
+@tf.function(experimental_relax_shapes=True)
+def _distributed_train_on_step(model, inputs, loss_fn, optimizer, strategy):
+  per_replica_loss = strategy.run(_train_on_step, args=(model, inputs, loss_fn, optimizer))
+  return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None)
 
-  loss = tf.nn.weighted_cross_entropy_with_logits(y_trues, logits, pos_weight=1)
-  masked_loss = tf.multiply(loss, masks)
-  length = loss.shape[1]
-  weighted_loss = tf.multiply(masked_loss, weight[: length, : length])
 
-  return tf.reduce_sum(tf.reduce_mean(weighted_loss, axis=0))
+@tf.function(experimental_relax_shapes=True)
+def _distributed_train_off_step(model, inputs, loss_fn, strategy):
+  per_replica_loss = strategy.run(_train_off_step, args=(model, inputs, loss_fn))
+  return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None)
+
+
+def masked_weighted_cross_entropy(range_weighted_mat, distributed=False):
+  def func(y_trues: tf.Tensor, logits: tf.Tensor, masks: tf.Tensor) -> tf.Tensor:
+    loss = tf.nn.weighted_cross_entropy_with_logits(y_trues, logits, pos_weight=1)
+    masked_loss = tf.multiply(loss, masks)
+    length = tf.shape(loss)[1]
+    weighted_loss = tf.multiply(masked_loss, range_weighted_mat[: length, : length])        # [B, L, L]
+    if distributed:
+      # for distributed training
+      return tf.nn.compute_average_loss(weighted_loss)
+    else:
+      return tf.reduce_sum(tf.reduce_mean(weighted_loss, axis=0))
+
+  return func
 
 
 def get_range_weighted_matrix(range_wt: List, max_len: int) -> tf.Tensor:
@@ -130,16 +141,25 @@ def evaluate(model: tf.keras.Model,
 
 def train(model: tf.keras.Model,
           feeder: Feeder,
-          hparams: Dict) -> None:
+          hparams: Dict,
+          distribute_strategy: Union[tf.distribute.Strategy, None]) -> None:
 
   hp = hparams
   range_weighted_mat = get_range_weighted_matrix(hp['range_weights'], hp['max_protein_length'])
-  loss_fn = masked_weighted_cross_entropy
-  optimizer = tf.optimizers.Adam(learning_rate=hp['learning_rate'])
-  ckpt_obj, ckpt_mgr = configure_checkpoint(model, optimizer, hp['checkpoint_dir'], hp['resume_training'])
+
+  if distribute_strategy is None:
+    loss_fn = masked_weighted_cross_entropy(range_weighted_mat, distributed=False)
+    optimizer = tf.optimizers.Adam(learning_rate=hp['learning_rate'])
+    ckpt_obj, ckpt_mgr = configure_checkpoint(model, optimizer, hp['checkpoint_dir'], hp['resume_training'])
+  else:
+    loss_fn = masked_weighted_cross_entropy(range_weighted_mat, distributed=True)
+    with distribute_strategy.scope():
+      optimizer = tf.optimizers.Adam(learning_rate=hp['learning_rate'])
+      ckpt_obj, ckpt_mgr = configure_checkpoint(model, optimizer, hp['checkpoint_dir'], hp['resume_training'])
+
   summary_writer = configure_summary(hp['summary_dir'])
 
-  for epoch in range(int(ckpt_obj.epoch), hp['epochs'] + 1):
+  for epoch in range(ckpt_obj.epoch.numpy(), hp['epochs'] + 1):
     ckpt_obj.epoch.assign_add(1)
     losses = []
     start = time.time()
@@ -149,7 +169,7 @@ def train(model: tf.keras.Model,
         ckpt_obj.step.assign_add(1)
         # TODO: add summary_step?
         with tf.summary.record_if(i == 0):
-          loss = _train_on_step(model, data_dict, loss_fn, optimizer, range_weighted_mat)
+          loss = _distributed_train_on_step(model, data_dict, loss_fn, optimizer, distribute_strategy)
         losses.append(loss.numpy())
       train_loss_average = np.mean(losses) / hp['batch_size']
       tf.summary.scalar('loss', train_loss_average)
@@ -158,19 +178,19 @@ def train(model: tf.keras.Model,
     with summary_writer['valid'].as_default():
       for (i, data_dict) in enumerate(feeder.valid):
         with tf.summary.record_if(i == 0):
-          loss = _train_off_step(model, data_dict, loss_fn, range_weighted_mat)
+          loss = _distributed_train_off_step(model, data_dict, loss_fn, distribute_strategy)
         losses.append(loss.numpy())
       valid_loss_average = np.mean(losses) / hp['test_batch_size']
       tf.summary.scalar('loss', valid_loss_average)
 
-      precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5 = evaluate(model, feeder, split_str='valid')
-      tf.summary.scalar('precision', precision)
-      tf.summary.scalar('recall', recall)
-      tf.summary.scalar('f1', f1)
-      tf.summary.scalar('aupr', aupr)
-      tf.summary.scalar('precision_L', precision_L)
-      tf.summary.scalar('precision_L_2', precision_L_2)
-      tf.summary.scalar('precision_L_5', precision_L_5)
+      #precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5 = evaluate(model, feeder, split_str='valid')
+      #tf.summary.scalar('precision', precision)
+      #tf.summary.scalar('recall', recall)
+      #tf.summary.scalar('f1', f1)
+      #tf.summary.scalar('aupr', aupr)
+      #tf.summary.scalar('precision_L', precision_L)
+      #tf.summary.scalar('precision_L_2', precision_L_2)
+      #tf.summary.scalar('precision_L_5', precision_L_5)
 
     print("Epoch: {} | train loss: {:.3f} | time: {:.2f}s | valid loss: {:.3f})".format(
         epoch, train_loss_average, time.time() - start, valid_loss_average))
