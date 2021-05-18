@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Union, List, Dict, Callable, Tuple
+from typing import Union, List, Dict, Tuple
 
 import numpy as np
 import tensorflow as tf
@@ -38,53 +38,15 @@ def configure_summary(summary_dir: Union[str, None]) -> Dict:
   return {'train': tf.summary.create_file_writer(train_log), 'valid': tf.summary.create_file_writer(valid_log)}
 
 
-#@tf.function
-def _train_on_step(model: tf.keras.Model,
-                   inputs: Dict,
-                   loss_fn: Callable,
-                   optimizer: tf.keras.optimizers.Optimizer) -> tf.Tensor:
+def masked_weighted_cross_entropy(range_weighted_mat):
+  """Compute cross entropy with sequence mask and range weight."""
 
-  with tf.GradientTape() as tape:
-    logits = model(inputs['primary'])
-    loss = loss_fn(inputs['contact_map'], logits, inputs['mask_2D'])
-  grads = tape.gradient(loss, model.trainable_variables)
-  optimizer.apply_gradients(zip(grads, model.trainable_variables))
-  return loss
-
-
-#@tf.function
-def _train_off_step(model: tf.keras.Model,
-                    inputs: Dict,
-                    loss_fn: Callable) -> tf.Tensor:
-
-  logits = model(inputs['primary'])
-  loss = loss_fn(inputs['contact_map'], logits, inputs['mask_2D'])
-  return loss
-
-
-@tf.function(experimental_relax_shapes=True)
-def _distributed_train_on_step(model, inputs, loss_fn, optimizer, strategy):
-  per_replica_loss = strategy.run(_train_on_step, args=(model, inputs, loss_fn, optimizer))
-  return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None)
-
-
-@tf.function(experimental_relax_shapes=True)
-def _distributed_train_off_step(model, inputs, loss_fn, strategy):
-  per_replica_loss = strategy.run(_train_off_step, args=(model, inputs, loss_fn))
-  return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None)
-
-
-def masked_weighted_cross_entropy(range_weighted_mat, distributed=False):
   def func(y_trues: tf.Tensor, logits: tf.Tensor, masks: tf.Tensor) -> tf.Tensor:
     loss = tf.nn.weighted_cross_entropy_with_logits(y_trues, logits, pos_weight=1)
     masked_loss = tf.multiply(loss, masks)
     length = tf.shape(loss)[1]
     weighted_loss = tf.multiply(masked_loss, range_weighted_mat[: length, : length])        # [B, L, L]
-    if distributed:
-      # for distributed training
-      return tf.nn.compute_average_loss(weighted_loss)
-    else:
-      return tf.reduce_sum(tf.reduce_mean(weighted_loss, axis=0))
+    return tf.nn.compute_average_loss(weighted_loss)
 
   return func
 
@@ -138,67 +100,96 @@ def evaluate(model: tf.keras.Model,
   return list(map(np.mean, [precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5]))
 
 
-
 def train(model: tf.keras.Model,
           feeder: Feeder,
           hparams: Dict,
-          distribute_strategy: Union[tf.distribute.Strategy, None]) -> None:
+          strategy: tf.distribute.Strategy) -> None:
 
   hp = hparams
+  summary_writer = configure_summary(hp['summary_dir'])
   range_weighted_mat = get_range_weighted_matrix(hp['range_weights'], hp['max_protein_length'])
 
-  if distribute_strategy is None:
-    loss_fn = masked_weighted_cross_entropy(range_weighted_mat, distributed=False)
+  with strategy.scope():
+    loss_fn = masked_weighted_cross_entropy(range_weighted_mat)
     optimizer = tf.optimizers.Adam(learning_rate=hp['learning_rate'])
     ckpt_obj, ckpt_mgr = configure_checkpoint(model, optimizer, hp['checkpoint_dir'], hp['resume_training'])
-  else:
-    loss_fn = masked_weighted_cross_entropy(range_weighted_mat, distributed=True)
-    with distribute_strategy.scope():
-      optimizer = tf.optimizers.Adam(learning_rate=hp['learning_rate'])
-      ckpt_obj, ckpt_mgr = configure_checkpoint(model, optimizer, hp['checkpoint_dir'], hp['resume_training'])
 
-  summary_writer = configure_summary(hp['summary_dir'])
+    @tf.function(experimental_relax_shapes=True)
+    def train_step(inputs: Dict) -> tf.Tensor:
+      """Perform a distributed training step."""
 
-  for epoch in range(ckpt_obj.epoch.numpy(), hp['epochs'] + 1):
-    ckpt_obj.epoch.assign_add(1)
-    losses = []
-    start = time.time()
-    tf.summary.experimental.set_step(epoch)
-    with summary_writer['train'].as_default():
-      for (i, data_dict) in enumerate(feeder.train):
-        ckpt_obj.step.assign_add(1)
-        # TODO: add summary_step?
-        with tf.summary.record_if(i == 0):
-          loss = _distributed_train_on_step(model, data_dict, loss_fn, optimizer, distribute_strategy)
-        losses.append(loss.numpy())
-      train_loss_average = np.mean(losses) / hp['batch_size']
-      tf.summary.scalar('loss', train_loss_average)
+      def _train_step_fn(x, y_true, mask):
+        """Replicated training step."""
 
-    losses = []
-    with summary_writer['valid'].as_default():
-      for (i, data_dict) in enumerate(feeder.valid):
-        with tf.summary.record_if(i == 0):
-          loss = _distributed_train_off_step(model, data_dict, loss_fn, distribute_strategy)
-        losses.append(loss.numpy())
-      valid_loss_average = np.mean(losses) / hp['test_batch_size']
-      tf.summary.scalar('loss', valid_loss_average)
+        with tf.GradientTape() as tape:
+          logits = model(x)
+          loss = loss_fn(y_true, logits, mask)
+        grads = tape.gradient(loss, model.trainable_variables)
+        optimizer.apply_gradients(zip(grads, model.trainable_variables))
+        return loss
 
-      #precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5 = evaluate(model, feeder, split_str='valid')
-      #tf.summary.scalar('precision', precision)
-      #tf.summary.scalar('recall', recall)
-      #tf.summary.scalar('f1', f1)
-      #tf.summary.scalar('aupr', aupr)
-      #tf.summary.scalar('precision_L', precision_L)
-      #tf.summary.scalar('precision_L_2', precision_L_2)
-      #tf.summary.scalar('precision_L_5', precision_L_5)
+      per_replica_loss = strategy.run(_train_step_fn, args=(inputs['primary'],
+                                                            inputs['contact_map'],
+                                                            inputs['mask_2d']))
+      return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None)
 
-    print("Epoch: {} | train loss: {:.3f} | time: {:.2f}s | valid loss: {:.3f})".format(
-        epoch, train_loss_average, time.time() - start, valid_loss_average))
+    @tf.function(experimental_relax_shapes=True)
+    def test_step(inputs: Dict) -> tf.Tensor:
+      """Perform a distributed testing step."""
+
+      def _test_step_fn(x, y_true, mask):
+        """Replicated testing step."""
+
+        logits = model(x)
+        loss = loss_fn(y_true, logits, mask)
+        return loss
+
+      per_replica_loss = strategy.run(_test_step_fn, args=(inputs['primary'],
+                                                           inputs['contact_map'],
+                                                           inputs['mask_2d']))
+      return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None)
+
+    ##
+    for epoch in range(ckpt_obj.epoch.numpy(), hp['epochs'] + 1):
+      ckpt_obj.epoch.assign_add(1)
+      losses = []
+      start = time.time()
+      tf.summary.experimental.set_step(epoch)
+      with summary_writer['train'].as_default():
+        for (i, data_dict) in enumerate(feeder.train):
+          ckpt_obj.step.assign_add(1)
+          # TODO: add summary_step?
+          with tf.summary.record_if(i == 0):
+            loss = train_step(data_dict)
+          losses.append(loss.numpy())
+        train_average_loss = np.mean(losses)
+        tf.summary.scalar('loss', train_average_loss)
+
+      losses = []
+      with summary_writer['valid'].as_default():
+        for (i, data_dict) in enumerate(feeder.valid):
+          with tf.summary.record_if(i == 0):
+            loss = test_step(data_dict)
+          losses.append(loss.numpy())
+        valid_average_loss = np.mean(losses)
+        tf.summary.scalar('loss', valid_average_loss)
+
+        #precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5 = evaluate(model, feeder, split_str='valid')
+        #tf.summary.scalar('precision', precision)
+        #tf.summary.scalar('recall', recall)
+        #tf.summary.scalar('f1', f1)
+        #tf.summary.scalar('aupr', aupr)
+        #tf.summary.scalar('precision_L', precision_L)
+        #tf.summary.scalar('precision_L_2', precision_L_2)
+        #tf.summary.scalar('precision_L_5', precision_L_5)
+
+      print("Epoch: {} | train average loss: {:.3f} | time: {:.2f}s | valid average loss: {:.3f})".format(
+          epoch, train_average_loss, time.time() - start, valid_average_loss))
 
 
-    if epoch % hp['checkpoint_inteval'] == 0:
-      save_path = ckpt_mgr.save()
-      print("Saved checkpoint for epoch {}: {}".format(epoch, save_path))
+      if epoch % hp['checkpoint_inteval'] == 0:
+        save_path = ckpt_mgr.save()
+        print("Saved checkpoint for epoch {}: {}".format(epoch, save_path))
 
 
 

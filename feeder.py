@@ -1,6 +1,6 @@
 import os
 from glob import glob
-from typing import List, Dict, Union, Callable
+from typing import List, Dict, Callable
 import tensorflow as tf
 
 
@@ -13,7 +13,7 @@ class Feeder():
                test_batch_size: int,
                bucket_boundaries: List[int],
                tf_parse_func: Callable[[bytes], Dict[str, tf.Tensor]],
-               distribute_strategy: Union[tf.distribute.Strategy, None],
+               distribute_strategy: tf.distribute.Strategy,
                shuffle: bool = False,
                max_protein_length: int = 1000):
 
@@ -27,21 +27,21 @@ class Feeder():
     self._build_data_loader(data_folder, distribute_strategy)
 
   def _build_data_loader(self, data_folder: str,
-                         strategy: Union[tf.distribute.Strategy, None]) -> None:
+                         strategy: tf.distribute.Strategy) -> None:
     train_files = self._get_data_files(data_folder, 'train')
     valid_files = self._get_data_files(data_folder, 'valid')
     test_files = self._get_data_files(data_folder, 'test')
 
-    if strategy is not None:
-      train_loader = self._build(train_files, self.batch_size, shuffle=self.shuffle,
-                                 bucket_batch=True, drop_remainder=True)
-      valid_loader = self._build(valid_files, self.test_batch_size, drop_remainder=True)
-      self.train = strategy.experimental_distribute_dataset(train_loader)
-      self.valid = strategy.experimental_distribute_dataset(valid_loader)
-    else:
-      self.train = self._build(train_files, self.batch_size, shuffle=self.shuffle, bucket_batch=True)
-      self.valid = self._build(valid_files, self.test_batch_size)
-    self.test = self._build(test_files, self.test_batch_size)
+    # check whether strategy is a Default Strategy
+    with strategy.scope():
+      has_strat = tf.distribute.has_strategy()
+
+    train_loader = self._build(train_files, self.batch_size, drop_remainder=has_strat,
+                               shuffle=self.shuffle, bucket_batch=True)
+    valid_loader = self._build(valid_files, self.test_batch_size, drop_remainder=has_strat)
+    self.train = strategy.experimental_distribute_dataset(train_loader)
+    self.valid = strategy.experimental_distribute_dataset(valid_loader)
+    self.test = self._build(test_files, self.test_batch_size, drop_remainder=False)
 
   def _get_data_files(self,
                       data_folder: str,
@@ -58,9 +58,9 @@ class Feeder():
   def _build(self,
              data_files: List[str],
              batch_size: int,
+             drop_remainder: bool,
              shuffle: bool = False,
-             bucket_batch: bool = False,
-             drop_remainder=False) -> tf.data.Dataset:
+             bucket_batch: bool = False) -> tf.data.Dataset:
 
     dataset = tf.data.TFRecordDataset(data_files)
     dataset = dataset.map(self._tf_parse_func, num_parallel_calls=tf.data.experimental.AUTOTUNE)

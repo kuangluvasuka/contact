@@ -124,16 +124,16 @@ def deserialize_proteinnet_sequence(serialized_example):
 
     # Generate tertiary masking matrix--if mask is missing then assume all residues are present
     # and convert mask into 2-dimensional
-    mask_1D = tf.cond(tf.not_equal(tf.size(mask), 0), lambda: mask, lambda: tf.ones(protein_length))
-    mask_1D = tf.cast(mask_1D, tf.float32)
-    mask_2D = tf.multiply(tf.expand_dims(mask_1D, axis=1), tf.expand_dims(mask_1D, axis=0))
+    mask_1d = tf.cond(tf.not_equal(tf.size(mask), 0), lambda: mask, lambda: tf.ones(protein_length))
+    mask_1d = tf.cast(mask_1d, tf.float32)
+    mask_2d = tf.multiply(tf.expand_dims(mask_1d, axis=1), tf.expand_dims(mask_1d, axis=0))
 
     return {'id': id_,
             'primary': primary,
             'contact_map': contact_map,
             'evolutionary': evolutionary,
             'protein_length': protein_length,
-            'mask_2D': mask_2D}
+            'mask_2d': mask_2d}
 
 
 def get_proteinnet_length_statistics(data_folder):
