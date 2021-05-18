@@ -10,7 +10,6 @@ import pandas as pd
 from sklearn.metrics import (precision_score, recall_score, f1_score, average_precision_score)
 
 
-
 #def precision_cutoff(true_labels: List[int],
 #                     predictions: List[int],
 #                     cutoff_idx: int):
@@ -25,7 +24,6 @@ from sklearn.metrics import (precision_score, recall_score, f1_score, average_pr
 #  precision = precision_score(cutoff_true_labels, cutoff_predictions)
 #
 #  return precision
-
 
 def apply_to_full_data(labels: List[int],
                        predictions: List[int],
@@ -116,9 +114,9 @@ def collect_metrics(true_maps: List[int],
   binarized_predictions = [[1 if i > 0.5 else 0 for i in predicted_prob] for predicted_prob in predicted_probs]
 
   # Simple metrics on binarized predictions
-  precision = apply_to_full_data(true_maps, binarized_predictions, precision_score)
-  recall = apply_to_full_data(true_maps, binarized_predictions, recall_score)
-  f1 = apply_to_full_data(true_maps, binarized_predictions, f1_score)
+  precision = apply_to_full_data(true_maps, binarized_predictions, lambda x, y: precision_score(x, y, zero_division=0))
+  recall = apply_to_full_data(true_maps, binarized_predictions, lambda x, y: recall_score(x, y, zero_division=0))
+  f1 = apply_to_full_data(true_maps, binarized_predictions, lambda x, y: f1_score(x, y, zero_division=0))
 
   # Need to ensure any runs with only 0's are dropped
   aupr = []
