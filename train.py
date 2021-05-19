@@ -53,9 +53,9 @@ def masked_weighted_cross_entropy(range_weighted_mat):
 
 def get_range_weighted_matrix(range_wt: List, max_len: int) -> tf.Tensor:
   """
-  Create a weighted symmetric matrix for close-short-medium-long range of contacts.
-  The range is defined as: 0~5, 6~11, 12~23, 24~max
-  Note: max_len > 24
+    Create a weighted symmetric matrix for close-short-medium-long range of contacts.
+    The range is defined as: 0~5, 6~11, 12~23, 24~max
+    Note: max_len > 24
   """
   mat = np.zeros([max_len, max_len])
   row = np.array([range_wt[0]] * 6 + [range_wt[1]] * 6 + [range_wt[2]] * 12 + [range_wt[3]] * (max_len - 24))
@@ -68,32 +68,37 @@ def get_range_weighted_matrix(range_wt: List, max_len: int) -> tf.Tensor:
   return tf.constant(res, dtype=tf.float32)
 
 
-def evaluate(model: tf.keras.Model,
-             feeder: Feeder,
-             split_str: str = 'test'):
+def evaluate(model: tf.keras.Model, test_loader: tf.data.Dataset):
 
-  loader = feeder.test
-  if split_str == 'valid':
-    loader = feeder.valid
+  #TODO: check if dataset is test set
 
   contact_preds = []
   contact_trues = []
-  for (i, data_dict) in enumerate(loader):
+  for (i, data_dict) in enumerate(test_loader):
     logits = model(data_dict['primary'])
     preds = [convert_contact_map(x) for x in logits.numpy()]
     trues = [x for x in data_dict['contact_map'].numpy()]    # convert from array(B, N, N) to list of arr(N, N)
-    masks = data_dict['mask_2D'].numpy()
+    masks = data_dict['mask_2d'].numpy()
     masked_preds = [np.multiply(x, y) for x, y in zip(masks, preds)]
-    masked_trues = [np.multiply(x, y) for x, y in zip(masks, trues)]
+
+    #TODO: delete
+    #masked_trues = [np.multiply(x, y) for x, y in zip(masks, trues)]
+    masked_trues = trues
 
     contact_preds.extend(masked_preds)
     contact_trues.extend(masked_trues)
 
-  partitioned_preds = [partition_contacts(x) for x in contact_preds]
-  partitioned_trues = [partition_contacts(x) for x in contact_trues]
+  return evaluation_metrics(contact_preds, contact_trues), contact_preds, contact_trues
+
+
+def evaluation_metrics(preds, trues):
+  partitioned_preds = [partition_contacts(x) for x in preds]
+  partitioned_trues = [partition_contacts(x) for x in trues]
 
   short_preds = list(zip(*partitioned_preds))[0]
   short_trues = list(zip(*partitioned_trues))[0]
+
+  #TODO: add medium and long evaluations
 
   precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5 = collect_metrics(short_trues, short_preds)
 
@@ -112,6 +117,8 @@ def train(model: tf.keras.Model,
   with strategy.scope():
     loss_fn = masked_weighted_cross_entropy(range_weighted_mat)
     optimizer = tf.optimizers.Adam(learning_rate=hp['learning_rate'])
+
+    #TODO: refactor checkpoint
     ckpt_obj, ckpt_mgr = configure_checkpoint(model, optimizer, hp['checkpoint_dir'], hp['resume_training'])
 
     @tf.function(experimental_relax_shapes=True)
@@ -140,14 +147,23 @@ def train(model: tf.keras.Model,
       def _test_step_fn(x, y_true, mask):
         """Replicated testing step."""
 
-        logits = model(x)
-        loss = loss_fn(y_true, logits, mask)
-        return loss
 
-      per_replica_loss = strategy.run(_test_step_fn, args=(inputs['primary'],
-                                                           inputs['contact_map'],
-                                                           inputs['mask_2d']))
-      return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None)
+        #TODO: evaluate & test_step inconsistancy
+
+        logits = model(x)
+        masked_logits = tf.multiply(logits, mask)
+        loss = loss_fn(y_true, logits, mask)
+        return loss, masked_logits, y_true
+
+      per_replica_loss, pr_logit, pr_y_true = strategy.run(_test_step_fn, args=(inputs['primary'],
+                                                                                inputs['contact_map'],
+                                                                                inputs['mask_2d']))
+      #TODO: check here
+
+      return [strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None),
+              strategy.gather(pr_logit, axis=0),
+              strategy.gather(pr_y_true, axis=0)]
+
 
     ##
     for epoch in range(ckpt_obj.epoch.numpy(), hp['epochs'] + 1):
@@ -166,26 +182,33 @@ def train(model: tf.keras.Model,
         tf.summary.scalar('loss', train_average_loss)
 
       losses = []
+      preds = []
+      trues = []
       with summary_writer['valid'].as_default():
         for (i, data_dict) in enumerate(feeder.valid):
           with tf.summary.record_if(i == 0):
-            loss = test_step(data_dict)
+            loss, logit, y_true = test_step(data_dict)                    # logit [B, L, L]
           losses.append(loss.numpy())
+          preds.extend([convert_contact_map(x) for x in logit.numpy()])
+          trues.extend([x for x in y_true.numpy()])                       # list of array(N, N)
+
         valid_average_loss = np.mean(losses)
         tf.summary.scalar('loss', valid_average_loss)
 
-        #precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5 = evaluate(model, feeder, split_str='valid')
-        #tf.summary.scalar('precision', precision)
-        #tf.summary.scalar('recall', recall)
-        #tf.summary.scalar('f1', f1)
-        #tf.summary.scalar('aupr', aupr)
-        #tf.summary.scalar('precision_L', precision_L)
-        #tf.summary.scalar('precision_L_2', precision_L_2)
-        #tf.summary.scalar('precision_L_5', precision_L_5)
+        precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5 = evaluation_metrics(preds, trues)
+        tf.summary.scalar('precision', precision)
+        tf.summary.scalar('recall', recall)
+        tf.summary.scalar('f1', f1)
+        tf.summary.scalar('aupr', aupr)
+        tf.summary.scalar('precision_L', precision_L)
+        tf.summary.scalar('precision_L_2', precision_L_2)
+        tf.summary.scalar('precision_L_5', precision_L_5)
 
       print("Epoch: {} | train average loss: {:.3f} | time: {:.2f}s | valid average loss: {:.3f})".format(
           epoch, train_average_loss, time.time() - start, valid_average_loss))
 
+      #TODO: delete
+      print(precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5)
 
       if epoch % hp['checkpoint_inteval'] == 0:
         save_path = ckpt_mgr.save()

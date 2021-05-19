@@ -128,6 +128,10 @@ def deserialize_proteinnet_sequence(serialized_example):
     mask_1d = tf.cast(mask_1d, tf.float32)
     mask_2d = tf.multiply(tf.expand_dims(mask_1d, axis=1), tf.expand_dims(mask_1d, axis=0))
 
+    #TODO:
+    #NOTE: bug workaround: the 110-th contact map in feeder.valid has bug
+    contact_map = tf.multiply(contact_map, mask_2d)
+
     return {'id': id_,
             'primary': primary,
             'contact_map': contact_map,
