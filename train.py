@@ -9,22 +9,16 @@ from feeder import Feeder
 from evaluate_metric import convert_contact_map, partition_contacts, collect_metrics
 
 
-def configure_checkpoint(model: tf.Tensor,
-                         optimizer: tf.keras.optimizers.Optimizer,
-                         checkpoint_dir: str,
-                         resume_training: bool = False) -> Tuple[tf.train.Checkpoint, tf.train.CheckpointManager]:
+def initialize_checkpoint(model: tf.Tensor,
+                          optimizer: tf.keras.optimizers.Optimizer,
+                          checkpoint_dir: str) -> tf.train.CheckpointManager:
 
   checkpoint = tf.train.Checkpoint(epoch=tf.Variable(1),
                                    step=tf.Variable(1),
                                    model=model,
                                    optimizer=optimizer)
   manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep=5)
-  if resume_training:
-    checkpoint.restore(manager.latest_checkpoint).assert_existing_objects_matched()
-    print("Checkpoint restored from {}.".format(manager.latest_checkpoint))
-  else:
-    print("Initializing checkpoint object at {}.".format(checkpoint_dir))
-  return checkpoint, manager
+  return manager
 
 
 def configure_summary(summary_dir: Union[str, None]) -> Dict:
@@ -107,8 +101,9 @@ def evaluation_metrics(preds, trues):
 
 def train(model: tf.keras.Model,
           feeder: Feeder,
-          hparams: Dict,
-          strategy: tf.distribute.Strategy) -> None:
+          optimizer: tf.optimizers.Optimizer,
+          strategy: tf.distribute.Strategy,
+          hparams: Dict) -> None:
 
   hp = hparams
   summary_writer = configure_summary(hp['summary_dir'])
@@ -116,10 +111,12 @@ def train(model: tf.keras.Model,
 
   with strategy.scope():
     loss_fn = masked_weighted_cross_entropy(range_weighted_mat)
-    optimizer = tf.optimizers.Adam(learning_rate=hp['learning_rate'])
 
-    #TODO: refactor checkpoint
-    ckpt_obj, ckpt_mgr = configure_checkpoint(model, optimizer, hp['checkpoint_dir'], hp['resume_training'])
+    checkpoint_manager = initialize_checkpoint(model, optimizer, hp['checkpoint_dir'])
+
+    if hp['resume_training']:
+      checkpoint_manager.checkpoint.restore(checkpoint_manager.latest_checkpoint).assert_existing_objects_matched()
+      print("Checkpoint restored from {}.".format(checkpoint_manager.latest_checkpoint))
 
     @tf.function(experimental_relax_shapes=True)
     def train_step(inputs: Dict) -> tf.Tensor:
@@ -166,14 +163,16 @@ def train(model: tf.keras.Model,
 
 
     ##
-    for epoch in range(ckpt_obj.epoch.numpy(), hp['epochs'] + 1):
-      ckpt_obj.epoch.assign_add(1)
+    current_epoch = checkpoint_manager.checkpoint.epoch.numpy()
+    print("Training started from Epoch: {}".format(current_epoch))
+    for epoch in range(current_epoch, hp['epochs'] + 1):
+      checkpoint_manager.checkpoint.epoch.assign_add(1)
       losses = []
       start = time.time()
       tf.summary.experimental.set_step(epoch)
       with summary_writer['train'].as_default():
-        for (i, data_dict) in enumerate(feeder.train):
-          ckpt_obj.step.assign_add(1)
+        for (i, data_dict) in enumerate(feeder.valid):
+          checkpoint_manager.checkpoint.step.assign_add(1)
           # TODO: add summary_step?
           with tf.summary.record_if(i == 0):
             loss = train_step(data_dict)
@@ -211,7 +210,7 @@ def train(model: tf.keras.Model,
       print(precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5)
 
       if epoch % hp['checkpoint_inteval'] == 0:
-        save_path = ckpt_mgr.save()
+        save_path = checkpoint_manager.save()
         print("Saved checkpoint for epoch {}: {}".format(epoch, save_path))
 
 
