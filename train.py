@@ -89,14 +89,37 @@ def evaluation_metrics(preds, trues):
   partitioned_preds = [partition_contacts(x) for x in preds]
   partitioned_trues = [partition_contacts(x) for x in trues]
 
-  short_preds = list(zip(*partitioned_preds))[0]
-  short_trues = list(zip(*partitioned_trues))[0]
+  short_preds, medium_preds, long_preds = list(zip(*partitioned_preds))
+  short_trues, medium_trues, long_trues = list(zip(*partitioned_trues))
 
-  #TODO: add medium and long evaluations
+  short_results = collect_metrics(short_trues, short_preds)
+  medium_results = collect_metrics(medium_trues, medium_preds)
+  long_results = collect_metrics(long_trues, long_preds)
 
-  precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5 = collect_metrics(short_trues, short_preds)
+  #NOTE: result format: [precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5]
+  results = {'short': list(map(np.mean, short_results)),
+             'medium': list(map(np.mean, medium_results)),
+             'long': list(map(np.mean, long_results))}
 
-  return list(map(np.mean, [precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5]))
+  return results
+
+
+def log_results(results: Dict):
+  """
+    NOTE: 1. Call this function within the scope of a tf.summary.SummaryWriter
+    Args:
+      results: a python dict with three keys: ['short', 'medium', 'long'], and each key
+      has a list of float values representing: [precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5]
+  """
+
+  for k, v in results.items():
+    tf.summary.scalar('precision/' + k, v[0])
+    tf.summary.scalar('recall/' + k, v[1])
+    tf.summary.scalar('f1/' + k, v[2])
+    tf.summary.scalar('aupr/' + k, v[3])
+    tf.summary.scalar('precision_L/' + k, v[4])
+    tf.summary.scalar('precision_L_2/' + k, v[5])
+    tf.summary.scalar('precision_L_5/' + k, v[6])
 
 
 def train(model: tf.keras.Model,
@@ -113,7 +136,6 @@ def train(model: tf.keras.Model,
     loss_fn = masked_weighted_cross_entropy(range_weighted_mat)
 
     checkpoint_manager = initialize_checkpoint(model, optimizer, hp['checkpoint_dir'])
-
     if hp['resume_training']:
       checkpoint_manager.checkpoint.restore(checkpoint_manager.latest_checkpoint).assert_existing_objects_matched()
       print("Checkpoint restored from {}.".format(checkpoint_manager.latest_checkpoint))
@@ -162,7 +184,7 @@ def train(model: tf.keras.Model,
               strategy.gather(pr_y_true, axis=0)]
 
 
-    ##
+    # train and valid
     current_epoch = checkpoint_manager.checkpoint.epoch.numpy()
     print("Training started from Epoch: {}".format(current_epoch))
     for epoch in range(current_epoch, hp['epochs'] + 1):
@@ -194,24 +216,12 @@ def train(model: tf.keras.Model,
         valid_average_loss = np.mean(losses)
         tf.summary.scalar('loss', valid_average_loss)
 
-        precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5 = evaluation_metrics(preds, trues)
-        tf.summary.scalar('precision', precision)
-        tf.summary.scalar('recall', recall)
-        tf.summary.scalar('f1', f1)
-        tf.summary.scalar('aupr', aupr)
-        tf.summary.scalar('precision_L', precision_L)
-        tf.summary.scalar('precision_L_2', precision_L_2)
-        tf.summary.scalar('precision_L_5', precision_L_5)
+        results = evaluation_metrics(preds, trues)
+        log_results(results)
 
       print("Epoch: {} | train average loss: {:.3f} | time: {:.2f}s | valid average loss: {:.3f})".format(
           epoch, train_average_loss, time.time() - start, valid_average_loss))
 
-      #TODO: delete
-      print(precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5)
-
       if epoch % hp['checkpoint_inteval'] == 0:
         save_path = checkpoint_manager.save()
         print("Saved checkpoint for epoch {}: {}".format(epoch, save_path))
-
-
-
