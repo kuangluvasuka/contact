@@ -70,17 +70,11 @@ def evaluate(model: tf.keras.Model, test_loader: tf.data.Dataset):
   contact_trues = []
   for (i, data_dict) in enumerate(test_loader):
     logits = model(data_dict['primary'])
-    preds = [convert_contact_map(x) for x in logits.numpy()]
+    preds = [np.multiply(convert_contact_map(x), y) for x, y in zip(logits.numpy(), data_dict['mask_2d'].numpy())]
     trues = [x for x in data_dict['contact_map'].numpy()]    # convert from array(B, N, N) to list of arr(N, N)
-    masks = data_dict['mask_2d'].numpy()
-    masked_preds = [np.multiply(x, y) for x, y in zip(masks, preds)]
 
-    #TODO: delete
-    #masked_trues = [np.multiply(x, y) for x, y in zip(masks, trues)]
-    masked_trues = trues
-
-    contact_preds.extend(masked_preds)
-    contact_trues.extend(masked_trues)
+    contact_preds.extend(preds)
+    contact_trues.extend(trues)
 
   return evaluation_metrics(contact_preds, contact_trues), contact_preds, contact_trues
 
@@ -166,22 +160,15 @@ def train(model: tf.keras.Model,
       def _test_step_fn(x, y_true, mask):
         """Replicated testing step."""
 
-
-        #TODO: evaluate & test_step inconsistancy
-
         logits = model(x)
-        masked_logits = tf.multiply(logits, mask)
         loss = loss_fn(y_true, logits, mask)
-        return loss, masked_logits, y_true
+        return loss, logits
 
-      per_replica_loss, pr_logit, pr_y_true = strategy.run(_test_step_fn, args=(inputs['primary'],
-                                                                                inputs['contact_map'],
-                                                                                inputs['mask_2d']))
-      #TODO: check here
-
+      per_replica_loss, pr_logit = strategy.run(_test_step_fn, args=(inputs['primary'],
+                                                                     inputs['contact_map'],
+                                                                     inputs['mask_2d']))
       return [strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None),
-              strategy.gather(pr_logit, axis=0),
-              strategy.gather(pr_y_true, axis=0)]
+              strategy.gather(pr_logit, axis=0)]
 
 
     # train and valid
@@ -208,9 +195,13 @@ def train(model: tf.keras.Model,
       with summary_writer['valid'].as_default():
         for (i, data_dict) in enumerate(feeder.valid):
           with tf.summary.record_if(i == 0):
-            loss, logit, y_true = test_step(data_dict)                    # logit [B, L, L]
+            loss, logit = test_step(data_dict)                    # logit [B, L, L]
           losses.append(loss.numpy())
-          preds.extend([convert_contact_map(x) for x in logit.numpy()])
+
+          # gather necessary items from distributed replica
+          y_true = strategy.gather(data_dict['contact_map'], axis=0)
+          mask = strategy.gather(data_dict['mask_2d'], axis=0)
+          preds.extend([np.multiply(convert_contact_map(x), y) for x, y in zip(logit.numpy(), mask.numpy())])
           trues.extend([x for x in y_true.numpy()])                       # list of array(N, N)
 
         valid_average_loss = np.mean(losses)
