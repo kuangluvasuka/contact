@@ -193,7 +193,7 @@ def train(model: tf.keras.Model,
       start = time.time()
       tf.summary.experimental.set_step(epoch)
       with summary_writer['train'].as_default():
-        for (i, data_dict) in enumerate(feeder.valid):
+        for (i, data_dict) in enumerate(feeder.train):
           checkpoint_manager.checkpoint.step.assign_add(1)
           # TODO: add summary_step?
           with tf.summary.record_if(i == 0):
