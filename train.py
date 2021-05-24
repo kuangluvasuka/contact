@@ -1,35 +1,11 @@
-import os
 import time
-from typing import Union, List, Dict, Tuple
+from typing import List, Dict
 
 import numpy as np
 import tensorflow as tf
-from utils import time_string
 from feeder import Feeder
-from evaluate_metric import convert_contact_map, partition_contacts, collect_metrics
-
-
-def initialize_checkpoint(model: tf.Tensor,
-                          optimizer: tf.keras.optimizers.Optimizer,
-                          checkpoint_dir: str) -> tf.train.CheckpointManager:
-
-  checkpoint = tf.train.Checkpoint(epoch=tf.Variable(1),
-                                   step=tf.Variable(1),
-                                   model=model,
-                                   optimizer=optimizer)
-  manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep=5)
-  return manager
-
-
-def configure_summary(summary_dir: Union[str, None]) -> Dict:
-  if summary_dir is None:
-    return {'train': tf.summary.create_noop_writer(), 'valid': tf.summary.create_noop_writer()}
-  logdir = os.path.join(summary_dir, time_string())
-  train_log = os.path.join(logdir, 'train')
-  valid_log = os.path.join(logdir, 'valid')
-  os.makedirs(train_log, exist_ok=True)
-  os.makedirs(valid_log, exist_ok=True)
-  return {'train': tf.summary.create_file_writer(train_log), 'valid': tf.summary.create_file_writer(valid_log)}
+from utils import configure_summary, initialize_checkpoint, log_results, time_string
+from evaluate_metric import convert_contact_map, evaluation_metrics
 
 
 def masked_weighted_cross_entropy(range_weighted_mat):
@@ -77,43 +53,6 @@ def evaluate(model: tf.keras.Model, test_loader: tf.data.Dataset):
     contact_trues.extend(trues)
 
   return evaluation_metrics(contact_preds, contact_trues), contact_preds, contact_trues
-
-
-def evaluation_metrics(preds, trues):
-  partitioned_preds = [partition_contacts(x) for x in preds]
-  partitioned_trues = [partition_contacts(x) for x in trues]
-
-  short_preds, medium_preds, long_preds = list(zip(*partitioned_preds))
-  short_trues, medium_trues, long_trues = list(zip(*partitioned_trues))
-
-  short_results = collect_metrics(short_trues, short_preds)
-  medium_results = collect_metrics(medium_trues, medium_preds)
-  long_results = collect_metrics(long_trues, long_preds)
-
-  #NOTE: result format: [precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5]
-  results = {'short': list(map(np.mean, short_results)),
-             'medium': list(map(np.mean, medium_results)),
-             'long': list(map(np.mean, long_results))}
-
-  return results
-
-
-def log_results(results: Dict):
-  """
-    NOTE: 1. Call this function within the scope of a tf.summary.SummaryWriter
-    Args:
-      results: a python dict with three keys: ['short', 'medium', 'long'], and each key
-      has a list of float values representing: [precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5]
-  """
-
-  for k, v in results.items():
-    tf.summary.scalar('precision/' + k, v[0])
-    tf.summary.scalar('recall/' + k, v[1])
-    tf.summary.scalar('f1/' + k, v[2])
-    tf.summary.scalar('aupr/' + k, v[3])
-    tf.summary.scalar('precision_L/' + k, v[4])
-    tf.summary.scalar('precision_L_2/' + k, v[5])
-    tf.summary.scalar('precision_L_5/' + k, v[6])
 
 
 def train(model: tf.keras.Model,

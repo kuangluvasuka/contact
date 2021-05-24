@@ -131,3 +131,22 @@ def collect_metrics(true_maps: List[int],
   precision_L_5 = apply_to_full_data(true_maps, predicted_probs, lambda x, y: precision_cutoff(x, y, int(x.shape[0] / 5)))
 
   return precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5
+
+
+def evaluation_metrics(preds: List, trues: List):
+  partitioned_preds = [partition_contacts(x) for x in preds]
+  partitioned_trues = [partition_contacts(x) for x in trues]
+
+  short_preds, medium_preds, long_preds = list(zip(*partitioned_preds))
+  short_trues, medium_trues, long_trues = list(zip(*partitioned_trues))
+
+  short_results = collect_metrics(short_trues, short_preds)
+  medium_results = collect_metrics(medium_trues, medium_preds)
+  long_results = collect_metrics(long_trues, long_preds)
+
+  #NOTE: result format: [precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5]
+  results = {'short': list(map(np.mean, short_results)),
+             'medium': list(map(np.mean, medium_results)),
+             'long': list(map(np.mean, long_results))}
+
+  return results
