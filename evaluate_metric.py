@@ -38,17 +38,19 @@ def apply_to_full_data(labels: List[int],
 def sigmoid(x):
   """ 1-D Sigmoid that is more stable.
   """
-  return math.exp(-np.logaddexp(0, -x))
+  #return math.exp(-np.logaddexp(0, -x))
+  return np.exp(-np.logaddexp(0, -x))
 
 
 def convert_contact_map(logits: np.ndarray):
   """ Applies element-wise sigmoid, using stable version.
   """
-  predicted_probs = np.zeros_like(logits)
-  for i, row in enumerate(logits):
-    for j, p in enumerate(row):
-      predicted_probs[i, j] = sigmoid(p)
-  return predicted_probs
+  #predicted_probs = np.zeros_like(logits)
+  #for i, row in enumerate(logits):
+  #  for j, p in enumerate(row):
+  #    predicted_probs[i, j] = sigmoid(p)
+  #return predicted_probs
+  return sigmoid(logits)
 
 
 def load_predictions(model: str):
