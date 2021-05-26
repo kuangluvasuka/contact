@@ -1,4 +1,4 @@
-from typing import Tuple, Dict, List, Union, Callable
+from typing import Dict, List, Optional, Callable
 
 import tensorflow as tf
 from tensorflow.keras import layers
@@ -9,8 +9,8 @@ class AAEmbedding(layers.Layer):
   def __init__(self,
                units: int,
                vocab_size: int,
-               embedding_dim: Union[int, None],
-               pretrained_embedding: Union[tf.Tensor, None],
+               embedding_dim: Optional[int] = None,
+               pretrained_embedding: Optional[tf.Tensor] = None,
                activation: Callable[[tf.Tensor], tf.Tensor] = tf.nn.relu):
 
     super().__init__(self)
@@ -125,6 +125,7 @@ class DenseConv(layers.Layer):
     self.conv = layers.Conv2D(filters, kernel_size, padding='same')
 
   def call(self, x: tf.Tensor) -> tf.Tensor:
+    # concat pairs to get pair-wise feature vector
     x_expand_1 = tf.expand_dims(x, axis=1)            # [B, 1, L, dim]
     x_expand_2 = tf.expand_dims(x, axis=2)            # [B, L, 1, dim]
     x_abs = tf.math.abs(x_expand_1 - x_expand_2)      # [B, L, L, dim]
