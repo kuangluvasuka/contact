@@ -1,6 +1,7 @@
 import os
 from glob import glob
-from typing import List, Dict, Callable
+from typing import List, Dict, Callable, Optional
+import numpy as np
 import tensorflow as tf
 
 
