@@ -10,18 +10,11 @@ class AAEmbedding(layers.Layer):
                units: int,
                vocab_size: int,
                embedding_dim: Optional[int] = None,
-               pretrained_embedding: Optional[tf.Tensor] = None,
                activation: Callable[[tf.Tensor], tf.Tensor] = tf.nn.relu):
 
     super().__init__(self)
 
-    # initialize embedding
-    if pretrained_embedding is not None:
-
-      # TODO: trainable?
-      self.embedding = tf.Variable(initial_value=pretrained_embedding, trainable=True)
-    else:
-      self.embedding = tf.Variable(tf.random.normal([vocab_size, embedding_dim]))
+    self.embed_mat = tf.Variable(tf.random.normal([vocab_size, embedding_dim]))
 
     # initialize transformation weights
     self.weight_emb = tf.Variable(tf.random.normal([embedding_dim, units]))
@@ -31,10 +24,10 @@ class AAEmbedding(layers.Layer):
     self.act = activation
 
   def get_embedding_shape(self) -> tf.TensorShape:
-    return self.embedding.shape
+    return self.embed_mat.shape
 
   def get_embedding(self, x: tf.Tensor) -> tf.Tensor:
-    return tf.nn.embedding_lookup(self.embedding, x)
+    return tf.nn.embedding_lookup(self.embed_mat, x)
 
   def call(self, x: tf.Tensor) -> tf.Tensor:
     h_emb = tf.matmul(self.get_embedding(x), self.weight_emb)
@@ -43,7 +36,6 @@ class AAEmbedding(layers.Layer):
     # TODO: concatenate?
     h_out = h_emb + h_onehot + self.bias
     return self.act(h_out)
-
 
 
 class BiLSTM(layers.Layer):
@@ -147,15 +139,12 @@ class ConvModel(tf.keras.Model):
     super().__init__(self)
     hp = hparams
 
-    pretrained = None
-    if hp['pretrained']:
-      pass
-
-    self.layer_embedding = AAEmbedding(
-        units=hp['embedding_units'],
-        vocab_size=hp['vocab_size'],
-        embedding_dim=hp['embedding_dim'],
-        pretrained_embedding=pretrained)
+    self._use_pretrain = hp['use_pretrain']
+    if not self._use_pretrain:
+      self.layer_embedding = AAEmbedding(
+          units=hp['embedding_units'],
+          vocab_size=hp['vocab_size'],
+          embedding_dim=hp['embedding_dim'])
 
     self.layer_lstm = BiLSTM(
         units=hp['lstm_units'],
@@ -167,14 +156,12 @@ class ConvModel(tf.keras.Model):
         filters=hp['filters'],
         kernel_size=hp['kernel_size'])
 
-
-  def _load_pretrained(self, ) -> None:
-    pass
-
-
-  def call(self, x: tf.Tensor) -> tf.Tensor:
-    embedding = self.layer_embedding(x)
-    lstm_hidden = self.layer_lstm(embedding)
+  def call(self, inputs: Dict[str, tf.Tensor]) -> tf.Tensor:
+    if self._use_pretrain:
+      encoded_seq = inputs['pretrained_sequence']
+    else:
+      encoded_seq = self.layer_embedding(inputs['primary'])
+    lstm_hidden = self.layer_lstm(encoded_seq)
     contact_map = self.layer_conv(lstm_hidden)
     return contact_map
 

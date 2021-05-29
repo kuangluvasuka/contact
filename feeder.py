@@ -23,10 +23,7 @@ class Feeder():
     self.batch_size = batch_size
     self.test_batch_size = test_batch_size
 
-    self._pretrained_embedding = {}
-    if pretrained_embedding:
-      self._pretrained_embedding = pretrained_embedding
-      self._embedding_dim = pretrained_embedding.popitem()[1].shape[1]
+    self._pretrained_embedding = pretrained_embedding
 
     self.bucket_boundaries = bucket_boundaries
     self.shuffle = shuffle
@@ -71,20 +68,14 @@ class Feeder():
              bucket_batch: bool = False) -> tf.data.Dataset:
 
     dataset = tf.data.TFRecordDataset(data_files)
-    dataset = dataset.map(self._tf_parse_func, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    if isinstance(self._pretrained_embedding, dict):
+      embed_dim = next(iter(self._pretrained_embedding.values())).shape[1]
+      dataset = dataset.map(lambda s: self._tf_parse_func(s, self._pretrained_embedding, embed_dim),
+                            num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    else:
+      dataset = dataset.map(self._tf_parse_func, num_parallel_calls=tf.data.experimental.AUTOTUNE)
     dataset = dataset.filter(lambda d: d['protein_length'] <= self.max_protein_length)
     dataset = dataset.shuffle(1024) if shuffle else dataset.prefetch(1024)
-
-    if len(self._pretrained_embedding) != 0:
-      def insert_embedding(sample):
-        embedding = tf.py_function(lambda id_: self._pretrained_embedding.get(id_.numpy()),
-                                   [sample['id']],
-                                   tf.float32)
-        embedding.set_shape([sample['primary'].shape[0], self._embedding_dim])
-        sample.update({'pretrained_embedding': embedding})
-        return sample
-
-      dataset = dataset.map(insert_embedding, num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
     #pad_shapes = {'id': [],
     #              'primary': [self.max_protein_length],

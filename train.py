@@ -77,35 +77,31 @@ def train(model: tf.keras.Model,
     def train_step(inputs: Dict) -> tf.Tensor:
       """Perform a distributed training step."""
 
-      def _train_step_fn(x, y_true, mask):
+      def _train_step_fn(inp):
         """Replicated training step."""
 
         with tf.GradientTape() as tape:
-          logits = model(x)
-          loss = loss_fn(y_true, logits, mask)
+          logits = model(inp)
+          loss = loss_fn(inp['contact_map'], logits, inp['mask_2d'])
         grads = tape.gradient(loss, model.trainable_variables)
         optimizer.apply_gradients(zip(grads, model.trainable_variables))
         return loss
 
-      per_replica_loss = strategy.run(_train_step_fn, args=(inputs['primary'],
-                                                            inputs['contact_map'],
-                                                            inputs['mask_2d']))
+      per_replica_loss = strategy.run(_train_step_fn, args=(inputs,))
       return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None)
 
     @tf.function(experimental_relax_shapes=True)
     def test_step(inputs: Dict) -> tf.Tensor:
       """Perform a distributed testing step."""
 
-      def _test_step_fn(x, y_true, mask):
+      def _test_step_fn(inp):
         """Replicated testing step."""
 
-        logits = model(x)
-        loss = loss_fn(y_true, logits, mask)
+        logits = model(inp)
+        loss = loss_fn(inp['contact_map'], logits, inp['mask_2d'])
         return loss, logits
 
-      per_replica_loss, pr_logit = strategy.run(_test_step_fn, args=(inputs['primary'],
-                                                                     inputs['contact_map'],
-                                                                     inputs['mask_2d']))
+      per_replica_loss, pr_logit = strategy.run(_test_step_fn, args=(inputs,))
       return [strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None),
               strategy.gather(pr_logit, axis=0)]
 

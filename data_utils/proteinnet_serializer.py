@@ -75,7 +75,7 @@ def convert_to_pfam_vocab(sequence):
     return reencoded_tensor
 
 
-def deserialize_proteinnet_sequence(serialized_example):
+def deserialize_proteinnet_sequence(serialized_example, pretrained_embedding=None, embedding_dim=None):
     """ Reads and parses a ProteinNet TF Record.
         Primary sequences are mapped onto 20-dimensional one-hot vectors.
         Evolutionary sequences are mapped onto num_evo_entries-dimensional real-valued vectors.
@@ -132,12 +132,19 @@ def deserialize_proteinnet_sequence(serialized_example):
     #NOTE: bug workaround: the 110-th contact map in feeder.valid has bug
     contact_map = tf.multiply(contact_map, mask_2d)
 
-    return {'id': id_,
-            'primary': primary,
-            'contact_map': contact_map,
-            'evolutionary': evolutionary,
-            'protein_length': protein_length,
-            'mask_2d': mask_2d}
+    ret = {'id': id_,
+           'primary': primary,
+           'contact_map': contact_map,
+           'evolutionary': evolutionary,
+           'protein_length': protein_length,
+           'mask_2d': mask_2d}
+
+    if pretrained_embedding:
+        pretrained_seq = tf.py_function(lambda s: pretrained_embedding[s.numpy()], inp=[id_], Tout=tf.float32)
+        pretrained_seq.set_shape([primary.shape[0], embedding_dim])
+        ret.update({'pretrained_sequence': pretrained_seq})
+
+    return ret
 
 
 def get_proteinnet_length_statistics(data_folder):
