@@ -45,7 +45,7 @@ def evaluate(model: tf.keras.Model, test_loader: tf.data.Dataset):
   contact_preds = []
   contact_trues = []
   for (i, data_dict) in enumerate(test_loader):
-    logits = model(data_dict['primary'])
+    logits = model(data_dict)
     preds = [np.multiply(convert_contact_map(x), y) for x, y in zip(logits.numpy(), data_dict['mask_2d'].numpy())]
     trues = [x for x in data_dict['contact_map'].numpy()]    # convert from array(B, N, N) to list of arr(N, N)
 
