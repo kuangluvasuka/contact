@@ -103,7 +103,9 @@ def train(model: tf.keras.Model,
 
       per_replica_loss, pr_logit = strategy.run(_test_step_fn, args=(inputs,))
       return [strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None),
-              strategy.gather(pr_logit, axis=0)]
+              strategy.gather(pr_logit, axis=0),
+              strategy.gather(inputs['contact_map'], axis=0),
+              strategy.gather(inputs['mask_2d'], axis=0)]
 
 
     # train and valid
@@ -130,12 +132,9 @@ def train(model: tf.keras.Model,
       with summary_writer['valid'].as_default():
         for (i, data_dict) in enumerate(feeder.valid):
           with tf.summary.record_if(i == 0):
-            loss, logit = test_step(data_dict)                    # logit [B, L, L]
+            loss, logit, y_true, mask = test_step(data_dict)                    # logit [B, L, L]
           losses.append(loss.numpy())
 
-          # gather necessary items from distributed replica
-          y_true = strategy.gather(data_dict['contact_map'], axis=0)
-          mask = strategy.gather(data_dict['mask_2d'], axis=0)
           preds.extend([np.multiply(convert_contact_map(x), y) for x, y in zip(logit.numpy(), mask.numpy())])
           trues.extend([x for x in y_true.numpy()])                       # list of array(N, N)
 
