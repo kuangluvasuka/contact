@@ -9,7 +9,7 @@ class AAEmbedding(layers.Layer):
   def __init__(self,
                units: int,
                vocab_size: int,
-               embedding_dim: Optional[int] = None,
+               embedding_dim: int,
                activation: Callable[[tf.Tensor], tf.Tensor] = tf.nn.relu):
 
     super().__init__(self)
@@ -93,7 +93,7 @@ class DenseConv(layers.Layer):
   def __init__(self,
                fc_dims: List[int],
                filters: int,
-               kernel_size: int = 7):
+               kernel_size: int):
     """
       Args:
         fc_hidden_dim: List[int], dimensions of the output of the fully-connected layers
@@ -141,27 +141,20 @@ class ConvModel(tf.keras.Model):
 
     self._use_pretrain = hp['use_pretrain']
     if not self._use_pretrain:
-      self.layer_embedding = AAEmbedding(
-          units=hp['embedding_units'],
-          vocab_size=hp['vocab_size'],
-          embedding_dim=hp['embedding_dim'])
+      self.encoder = tf.keras.Sequential(name='encoder')
+      self.encoder.add(AAEmbedding(hp['embedding_units'], hp['vocab_size'], embedding_dim=hp['embedding_dim']))
 
-    self.layer_lstm = BiLSTM(
-        units=hp['lstm_units'],
-        num_stacks=hp['lstm_stacks'],
-        bidirectional=hp['bidirectional'])
+      self.encoder.add(BiLSTM(hp['lstm_units'], hp['lstm_stacks'], hp['bidirectional']))
 
-    self.layer_conv = DenseConv(
-        fc_dims=hp['fc_dims'],
-        filters=hp['filters'],
-        kernel_size=hp['kernel_size'])
+    self.decoder = tf.keras.Sequential(name='decoder')
+    self.decoder.add(DenseConv(hp['fc_dims'], hp['filters'], hp['kernel_size']))
 
   def call(self, inputs: Dict[str, tf.Tensor]) -> tf.Tensor:
     if self._use_pretrain:
       encoded_seq = inputs['pretrained_sequence']
     else:
-      encoded_seq = self.layer_embedding(inputs['primary'])
-    lstm_hidden = self.layer_lstm(encoded_seq)
-    contact_map = self.layer_conv(lstm_hidden)
-    return contact_map
+      encoded_seq = self.encoder(inputs['primary'])
+    asymmetric_map = self.decoder(encoded_seq)
+    contact_map_logit = (asymmetric_map + tf.transpose(asymmetric_map, (0, 2, 1))) / 2
+    return contact_map_logit
 
