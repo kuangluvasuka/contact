@@ -81,7 +81,7 @@ def train(model: tf.keras.Model,
         """Replicated training step."""
 
         with tf.GradientTape() as tape:
-          logits = model(inp)
+          logits = model(inp, training=True)
           loss = loss_fn(inp['contact_map'], logits, inp['mask_2d'])
         grads = tape.gradient(loss, model.trainable_variables)
         optimizer.apply_gradients(zip(grads, model.trainable_variables))

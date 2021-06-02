@@ -1,10 +1,10 @@
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional, Callable, Sequence, Any
 
 import tensorflow as tf
-from tensorflow.keras import layers
+import tensorflow.keras as K
 
 
-class AAEmbedding(layers.Layer):
+class AAEmbedding(K.layers.Layer):
   """Embedding of amino acids."""
   def __init__(self,
                units: int,
@@ -38,7 +38,7 @@ class AAEmbedding(layers.Layer):
     return self.act(h_out)
 
 
-class BiLSTM(layers.Layer):
+class BiLSTM(K.layers.Layer):
   def __init__(self,
                units: int,
                num_stacks: int,
@@ -59,29 +59,29 @@ class BiLSTM(layers.Layer):
 
     lstm_cells = []
     for _ in range(num_stacks):
-      lstm_cells.append(layers.LSTMCell(units))
-    stacked_lstm = layers.StackedRNNCells(lstm_cells)
+      lstm_cells.append(K.layers.LSTMCell(units))
+    stacked_lstm = K.layers.StackedRNNCells(lstm_cells)
 
     if bidirectional:
-      forward_layer = layers.RNN(
+      forward_layer = K.layers.RNN(
           stacked_lstm,
           return_sequences=True,
           return_state=False,
           time_major=False)
-      backward_layer = layers.RNN(
+      backward_layer = K.layers.RNN(
           stacked_lstm,
           return_sequences=True,
           return_state=False,
           time_major=False,
           go_backwards=True)
-      self.lstm = layers.Bidirectional(
+      self.lstm = K.layers.Bidirectional(
           forward_layer,
           backward_layer=backward_layer,
           merge_mode=None)
     else:
-      self.lstm = layers.RNN(stacked_lstm)
+      self.lstm = K.layers.RNN(stacked_lstm)
 
-    self.linear = layers.Dense(units)
+    self.linear = K.layers.Dense(units)
 
   def call(self, x: tf.Tensor) -> tf.Tensor:
     [forward, backward] = self.lstm(x)
@@ -89,7 +89,7 @@ class BiLSTM(layers.Layer):
     return self.linear(h)
 
 
-class DenseConv(layers.Layer):
+class DenseConv(K.layers.Layer):
   def __init__(self,
                fc_dims: List[int],
                filters: int,
@@ -112,25 +112,72 @@ class DenseConv(layers.Layer):
 
     self.fc = []
     for i in range(self._num_fc_layers - 1):
-      self.fc.append(layers.Dense(fc_dims[i], activation='relu'))
-    self.fc.append(layers.Dense(fc_dims[-1]))
-    self.conv = layers.Conv2D(filters, kernel_size, padding='same')
+      self.fc.append(K.layers.Dense(fc_dims[i], activation='relu'))
+    self.fc.append(K.layers.Dense(fc_dims[-1]))
+    self.conv = K.layers.Conv2D(filters, kernel_size, padding='same')
 
   def call(self, x: tf.Tensor) -> tf.Tensor:
-    # concat pairs to get pair-wise feature vector
-    x_expand_1 = tf.expand_dims(x, axis=1)            # [B, 1, L, dim]
-    x_expand_2 = tf.expand_dims(x, axis=2)            # [B, L, 1, dim]
-    x_abs = tf.math.abs(x_expand_1 - x_expand_2)      # [B, L, L, dim]
-    x_mul = tf.math.multiply(x_expand_1, x_expand_2)
-    pair_concat = tf.concat([x_abs, x_mul], axis=-1)  # [B, L, L, 2dim]
-
-    fc_hidden = [pair_concat]
+    fc_hidden = [x]
     for i in range(self._num_fc_layers):
       h = self.fc[i](fc_hidden[-1])
       fc_hidden.append(h)                             # fc_hidden[-1] = [B, L, L, H]
 
-    out = self.conv(fc_hidden[-1])
+    return self.conv(fc_hidden[-1])
 
-    return tf.squeeze(out, axis=3)
 
+class ResidualBlock(K.layers.Layer):
+  def __init__(self,
+               filters: int,
+               kernel_size: int,
+               dilation_rate: int = 1,
+               layer_norm: bool = False,
+               resize_shortcut: bool = False,
+               activation: str = 'leaky_relu',
+               drop_rate: float = 0.):
+    super().__init__()
+
+    if layer_norm:
+      self.layer_norm = K.layers.LayerNormalization(axis=-1)
+    else:
+      self.layer_norm = K.layers.Lambda(lambda x: x)
+
+    self.batch_norm1 = K.layers.BatchNormalization(axis=-1)
+    self.batch_norm2 = K.layers.BatchNormalization(axis=-1)
+
+    if activation == 'relu':
+      self.act1 = K.layers.ReLU()
+      self.act2 = K.layers.ReLU()
+    elif activation == 'leaky_relu':
+      self.act1 = K.layers.LeakyReLU()
+      self.act2 = K.layers.LeakyReLU()
+    else:
+      raise ValueError("Unknown activation option, please select from 'relu' or 'leaky_relu'.")
+
+    if resize_shortcut:
+      self.linear = K.layers.Dense(filters)
+    else:
+      self.linear = K.layers.Lambda(lambda x: x)
+
+    self.dropout = K.layers.Dropout(drop_rate)
+
+    self.conv1 = K.layers.Conv2D(filters, kernel_size, strides=1, padding='same', use_bias=True,
+                                 activation='linear', dilation_rate=dilation_rate)
+    self.conv2 = K.layers.Conv2D(filters, kernel_size, strides=1, padding='same', use_bias=True,
+                                 activation='linear', dilation_rate=dilation_rate)
+
+  def call(self, inputs, training=False):
+    x = inputs
+    x = self.layer_norm(inputs)
+
+    x = self.conv1(x)
+    x = self.batch_norm1(x, training=training)
+    x = self.act1(x)
+
+    x = self.conv2(x)
+    x = self.batch_norm2(x, training=training)
+
+    x = self.dropout(x, training=training)
+    x += self.linear(inputs)
+
+    return self.act2(x)
 
