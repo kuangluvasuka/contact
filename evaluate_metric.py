@@ -97,7 +97,8 @@ def precision_cutoff(true_labels: List[int],
   binarized_cutoff_predictions = [1 if i > 0.5 else 0 for i in cutoff_predictions]
   cutoff_true_labels = sorted_true_labels[:cutoff_idx]
   score = np.sum([(t == p) & (t == 1) for t, p in zip(cutoff_true_labels, binarized_cutoff_predictions)])
-  num_true_positives = np.sum([t == 1 for t in cutoff_true_labels])
+  #num_true_positives = np.sum([t == 1 for t in cutoff_true_labels])
+  num_true_positives = np.sum([p == 1 for p in binarized_cutoff_predictions])
   if num_true_positives > 0:
     score /= num_true_positives
   else:
