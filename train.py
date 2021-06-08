@@ -44,15 +44,18 @@ def evaluate(model: tf.keras.Model, test_loader: tf.data.Dataset):
 
   contact_preds = []
   contact_trues = []
+  lengths = []
   for (i, data_dict) in enumerate(test_loader):
     logits = model(data_dict)
     preds = [np.multiply(convert_contact_map(x), y) for x, y in zip(logits.numpy(), data_dict['mask_2d'].numpy())]
     trues = [x for x in data_dict['contact_map'].numpy()]    # convert from array(B, N, N) to list of arr(N, N)
+    length = [x for x in data_dict['protein_length'].numpy()]
 
     contact_preds.extend(preds)
     contact_trues.extend(trues)
+    lengths.extend(length)
 
-  return evaluation_metrics(contact_preds, contact_trues), contact_preds, contact_trues
+  return evaluation_metrics(contact_preds, contact_trues, lengths), contact_preds, contact_trues
 
 
 def train(model: tf.keras.Model,
@@ -105,7 +108,8 @@ def train(model: tf.keras.Model,
       return [strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None),
               strategy.gather(pr_logit, axis=0),
               strategy.gather(inputs['contact_map'], axis=0),
-              strategy.gather(inputs['mask_2d'], axis=0)]
+              strategy.gather(inputs['mask_2d'], axis=0),
+              strategy.gather(inputs['protein_length'], axis=0)]
 
 
     # train and valid
@@ -117,7 +121,7 @@ def train(model: tf.keras.Model,
       start = time.time()
       tf.summary.experimental.set_step(epoch)
       with summary_writer['train'].as_default():
-        for (i, data_dict) in enumerate(feeder.train):
+        for (i, data_dict) in enumerate(feeder.valid):
           checkpoint_manager.checkpoint.step.assign_add(1)
           # TODO: add summary_step?
           with tf.summary.record_if(i == 0):
@@ -129,19 +133,21 @@ def train(model: tf.keras.Model,
       losses = []
       preds = []
       trues = []
+      lengths = []
       with summary_writer['valid'].as_default():
         for (i, data_dict) in enumerate(feeder.valid):
           with tf.summary.record_if(i == 0):
-            loss, logit, y_true, mask = test_step(data_dict)                    # logit [B, L, L]
+            loss, logit, y_true, mask, length = test_step(data_dict)                    # logit [B, L, L]
           losses.append(loss.numpy())
 
           preds.extend([np.multiply(convert_contact_map(x), y) for x, y in zip(logit.numpy(), mask.numpy())])
           trues.extend([x for x in y_true.numpy()])                       # list of array(N, N)
+          lengths.extend([x for x in length.numpy()])
 
         valid_average_loss = np.mean(losses)
         tf.summary.scalar('loss', valid_average_loss)
 
-        results = evaluation_metrics(preds, trues)
+        results = evaluation_metrics(preds, trues, lengths)
         log_results(results)
 
       print("Epoch: {} | train average loss: {:.3f} | time: {:.2f}s | valid average loss: {:.3f})".format(

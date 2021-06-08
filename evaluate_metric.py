@@ -3,7 +3,6 @@
 """
 from typing import List, Callable
 
-import math
 import numpy as np
 import pickle as pkl
 import pandas as pd
@@ -108,7 +107,8 @@ def precision_cutoff(true_labels: List[int],
 
 
 def collect_metrics(true_maps: List[int],
-                    predicted_probs: List[float]):
+                    predicted_probs: List[float],
+                    lengths: List[int]):
   """ Returns all metrics for contact prediction.
 
   Takes in list of true maps and contact probs. Sorts in decreasing order
@@ -129,23 +129,24 @@ def collect_metrics(true_maps: List[int],
     else:
       aupr.append(average_precision_score(label, prediction))
 
-  precision_L = apply_to_full_data(true_maps, predicted_probs, lambda x, y: precision_cutoff(x, y, x.shape[0]))
-  precision_L_2 = apply_to_full_data(true_maps, predicted_probs, lambda x, y: precision_cutoff(x, y, int(x.shape[0] / 2)))
-  precision_L_5 = apply_to_full_data(true_maps, predicted_probs, lambda x, y: precision_cutoff(x, y, int(x.shape[0] / 5)))
+  tmp = list(zip(true_maps, lengths))
+  precision_L = apply_to_full_data(tmp, predicted_probs, lambda x, y: precision_cutoff(x[0], y, x[1]))
+  precision_L_2 = apply_to_full_data(tmp, predicted_probs, lambda x, y: precision_cutoff(x[0], y, int(x[1] / 2)))
+  precision_L_5 = apply_to_full_data(tmp, predicted_probs, lambda x, y: precision_cutoff(x[0], y, int(x[1] / 5)))
 
   return precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5
 
 
-def evaluation_metrics(preds: List, trues: List):
+def evaluation_metrics(preds: List[np.ndarray], trues: List[np.ndarray], lengths: List[int]):
   partitioned_preds = [partition_contacts(x) for x in preds]
   partitioned_trues = [partition_contacts(x) for x in trues]
 
   short_preds, medium_preds, long_preds = list(zip(*partitioned_preds))
   short_trues, medium_trues, long_trues = list(zip(*partitioned_trues))
 
-  short_results = collect_metrics(short_trues, short_preds)
-  medium_results = collect_metrics(medium_trues, medium_preds)
-  long_results = collect_metrics(long_trues, long_preds)
+  short_results = collect_metrics(short_trues, short_preds, lengths)
+  medium_results = collect_metrics(medium_trues, medium_preds, lengths)
+  long_results = collect_metrics(long_trues, long_preds, lengths)
 
   #NOTE: result format: [precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5]
   results = {'short': list(map(np.mean, short_results)),
