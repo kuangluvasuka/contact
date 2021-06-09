@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Callable, Sequence, Any
+from typing import Dict, List, Optional, Callable, Any, Tuple
 
 import tensorflow as tf
 import tensorflow.keras as K
@@ -12,7 +12,7 @@ class AAEmbedding(K.layers.Layer):
                embedding_dim: int,
                activation: Callable[[tf.Tensor], tf.Tensor] = tf.nn.relu):
 
-    super().__init__(self)
+    super().__init__()
 
     self.embed_mat = tf.Variable(tf.random.normal([vocab_size, embedding_dim]))
 
@@ -42,8 +42,7 @@ class BiLSTM(K.layers.Layer):
   def __init__(self,
                units: int,
                num_stacks: int,
-               bidirectional: bool,
-               ):
+               bidirectional: bool):
     """
       Args:
         units: int, dimensionality of the output tensor
@@ -55,7 +54,7 @@ class BiLSTM(K.layers.Layer):
       Output:
         h: vectors in shape=[B, L, units]
     """
-    super().__init__(self)
+    super().__init__()
 
     lstm_cells = []
     for _ in range(num_stacks):
@@ -106,7 +105,7 @@ class DenseConv(K.layers.Layer):
         h: shape=[B, L, L, 1]
     """
 
-    super().__init__(self)
+    super().__init__()
 
     self._num_fc_layers = len(fc_dims)
 
