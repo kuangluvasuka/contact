@@ -3,39 +3,21 @@ from typing import List, Dict, Any, Callable
 import numpy as np
 import tensorflow as tf
 
-from utils import time_string
+from utils import get_range_weighted_matrix, time_string
 from evaluate_metric import evaluation_metrics
 
 
-# TODO: refacor this function by subclassing tf.keras.losses.Loss!!!!!!!
-def masked_weighted_cross_entropy(range_weighted_mat: tf.Tensor) -> Callable:
-  """Compute cross entropy with sequence mask and range weight."""
+class masked_weighted_cross_entropy(tf.keras.losses.Loss):
+  def __init__(self, range_weighted_matrix: np.ndarray):
+    super().__init__(self)
+    self._range_weighted_matrix = tf.constant(range_weighted_matrix)
 
-  def func(y_trues: tf.Tensor, logits: tf.Tensor, masks: tf.Tensor, pos_weight: int = 1) -> tf.Tensor:
-    loss = tf.nn.weighted_cross_entropy_with_logits(y_trues, logits, pos_weight=pos_weight)
-    masked_loss = tf.multiply(loss, masks)
+  def __call__(self, y_true: tf.Tensor, logit: tf.Tensor, mask: tf.Tensor, pos_weight: int = 1):
+    loss = tf.nn.weighted_cross_entropy_with_logits(y_true, logit, pos_weight=pos_weight)
+    masked_loss = tf.multiply(loss, mask)
     length = tf.shape(loss)[1]
-    weighted_loss = tf.multiply(masked_loss, range_weighted_mat[: length, : length])        # [B, L, L]
+    weighted_loss = tf.multiply(masked_loss, self.range_weighted_matix[: length, : length])
     return tf.reduce_sum(weighted_loss, axis=[1, 2])
-
-  return func
-
-
-def get_range_weighted_matrix(range_wt: List, max_len: int) -> tf.Tensor:
-  """
-    Create a weighted symmetric matrix for close-short-medium-long range of contacts.
-    The range is defined as: 0~5, 6~11, 12~23, 24~max
-    Note: max_len > 24
-  """
-  mat = np.zeros([max_len, max_len])
-  row = np.array([range_wt[0]] * 6 + [range_wt[1]] * 6 + [range_wt[2]] * 12 + [range_wt[3]] * (max_len - 24))
-  for i in range(max_len):
-    mat[i] = row
-    row = np.roll(row, shift=1)
-    row[0] = 0
-  res = mat + mat.T
-  np.fill_diagonal(res, range_wt[0])
-  return tf.constant(res, dtype=tf.float32)
 
 
 def evaluate(model: tf.keras.Model, test_loader: tf.data.Dataset):
