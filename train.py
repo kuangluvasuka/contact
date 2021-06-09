@@ -1,22 +1,22 @@
-import time
-from typing import List, Dict
-
+import os
+from typing import List, Dict, Any, Callable
 import numpy as np
 import tensorflow as tf
-from feeder import Feeder
-from utils import configure_summary, initialize_checkpoint, log_results, time_string
+
+from utils import time_string
 from evaluate_metric import convert_contact_map, evaluation_metrics
 
 
-def masked_weighted_cross_entropy(range_weighted_mat):
+# TODO: refacor this function by subclassing tf.keras.losses.Loss!!!!!!!
+def masked_weighted_cross_entropy(range_weighted_mat: tf.Tensor) -> Callable:
   """Compute cross entropy with sequence mask and range weight."""
 
-  def func(y_trues: tf.Tensor, logits: tf.Tensor, masks: tf.Tensor) -> tf.Tensor:
-    loss = tf.nn.weighted_cross_entropy_with_logits(y_trues, logits, pos_weight=1)
+  def func(y_trues: tf.Tensor, logits: tf.Tensor, masks: tf.Tensor, pos_weight: int = 1) -> tf.Tensor:
+    loss = tf.nn.weighted_cross_entropy_with_logits(y_trues, logits, pos_weight=pos_weight)
     masked_loss = tf.multiply(loss, masks)
     length = tf.shape(loss)[1]
     weighted_loss = tf.multiply(masked_loss, range_weighted_mat[: length, : length])        # [B, L, L]
-    return tf.nn.compute_average_loss(weighted_loss)
+    return tf.reduce_sum(weighted_loss, axis=[1, 2])
 
   return func
 
@@ -58,101 +58,145 @@ def evaluate(model: tf.keras.Model, test_loader: tf.data.Dataset):
   return evaluation_metrics(contact_preds, contact_trues, lengths), contact_preds, contact_trues
 
 
-def train(model: tf.keras.Model,
-          feeder: Feeder,
-          optimizer: tf.optimizers.Optimizer,
-          strategy: tf.distribute.Strategy,
-          hparams: Dict) -> None:
+class Train():
+  def __init__(self,
+               model: tf.keras.Model,
+               optimizer: tf.optimizers.Optimizer,
+               strategy: tf.distribute.Strategy,
+               hp: Dict[str, Any],
+               tf_summary_dir: str,
+               checkpoint_dir: str):
 
-  hp = hparams
-  summary_writer = configure_summary(hp['summary_dir'])
-  range_weighted_mat = get_range_weighted_matrix(hp['range_weights'], hp['max_protein_length'])
+    self.model = model
+    self.optimizer = optimizer
+    self.loss_fn = masked_weighted_cross_entropy(get_range_weighted_matrix(hp['range_weights'], hp['max_protein_length']))
+    self.strategy = strategy
 
-  with strategy.scope():
-    loss_fn = masked_weighted_cross_entropy(range_weighted_mat)
+    self._train_loss_metric = tf.keras.metrics.Mean(name='train_loss')
+    self._valid_loss_metric = tf.keras.metrics.Mean(name='test_loss')
 
-    checkpoint_manager = initialize_checkpoint(model, optimizer, hp['checkpoint_dir'])
-    if hp['resume_training']:
-      checkpoint_manager.checkpoint.restore(checkpoint_manager.latest_checkpoint).assert_existing_objects_matched()
-      print("Checkpoint restored from {}.".format(checkpoint_manager.latest_checkpoint))
+    self._pos_weight = hp['pos_weight']
+    self._tf_summary_dir = tf_summary_dir
+    self._checkpoint_dir = checkpoint_dir
 
-    @tf.function(experimental_relax_shapes=True)
-    def train_step(inputs: Dict) -> tf.Tensor:
-      """Perform a distributed training step."""
+  def build(self):
+    """Setup summary writer and checkpoint."""
 
-      def _train_step_fn(inp):
-        """Replicated training step."""
+    time_str = time_string()
 
-        with tf.GradientTape() as tape:
-          logits = model(inp, training=True)
-          loss = loss_fn(inp['contact_map'], logits, inp['mask_2d'])
-        grads = tape.gradient(loss, model.trainable_variables)
-        optimizer.apply_gradients(zip(grads, model.trainable_variables))
-        return loss
+    train_summary_dir = os.path.join(os.path.join(self._tf_summary_dir, time_str), 'train')
+    valid_summary_dir = os.path.join(os.path.join(self._tf_summary_dir, time_str), 'valid')
+    os.makedirs(train_summary_dir, exist_ok=True)
+    os.makedirs(valid_summary_dir, exist_ok=True)
 
-      per_replica_loss = strategy.run(_train_step_fn, args=(inputs,))
-      return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None)
+    self._train_summary_writer = tf.summary.create_file_writer(train_summary_dir)
+    self._valid_summary_writer = tf.summary.create_file_writer(valid_summary_dir)
 
-    @tf.function(experimental_relax_shapes=True)
-    def test_step(inputs: Dict) -> tf.Tensor:
-      """Perform a distributed testing step."""
+    ckpt_dir = os.path.join(self._checkpoint_dir, time_str)
+    os.makedirs(ckpt_dir, exist_ok=True)
+    checkpoint = tf.train.Checkpoint(epoch=tf.Variable(1),
+                                     step=tf.Variable(1),
+                                     model=self.model,
+                                     optimizer=self.optimizer)
+    self._checkpoint_manager = tf.train.CheckpointManager(checkpoint, ckpt_dir, max_to_keep=5)
 
-      def _test_step_fn(inp):
-        """Replicated testing step."""
+  @tf.function(experimental_relax_shapes=True)
+  def _train_step(self, inputs: Dict[str, tf.Tensor]) -> None:
+    """Perform a distributed training step.
 
-        logits = model(inp)
-        loss = loss_fn(inp['contact_map'], logits, inp['mask_2d'])
-        return loss, logits
+       Note: This function works normally within the scope of a Default tf.distrute.strategy,
+             in other words, it will create single replica for non-distributed training.
+    """
 
-      per_replica_loss, pr_logit = strategy.run(_test_step_fn, args=(inputs,))
-      return [strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_loss, axis=None),
-              strategy.gather(pr_logit, axis=0),
-              strategy.gather(inputs['contact_map'], axis=0),
-              strategy.gather(inputs['mask_2d'], axis=0),
-              strategy.gather(inputs['protein_length'], axis=0)]
+    def fn(inp):
+      """Replicated training step."""
 
+      with tf.GradientTape() as tape:
+        logits = self.model(inp, training=True)
+        per_example_loss = self.loss_fn(inp['contact_map'], logits, inp['mask_2d'], self._pos_weight)
+        loss = tf.nn.compute_average_loss(per_example_loss)
+      grads = tape.gradient(loss, self.model.trainable_variables)
+      self.optimizer.apply_gradients(zip(grads, self.model.trainable_variables))
+      self._train_loss_metric.update_state(per_example_loss)
 
-    # train and valid
-    current_epoch = checkpoint_manager.checkpoint.epoch.numpy()
-    print("Training started from Epoch: {}".format(current_epoch))
-    for epoch in range(current_epoch, hp['epochs'] + 1):
-      checkpoint_manager.checkpoint.epoch.assign_add(1)
-      losses = []
-      start = time.time()
-      tf.summary.experimental.set_step(epoch)
-      with summary_writer['train'].as_default():
-        for (i, data_dict) in enumerate(feeder.train):
-          checkpoint_manager.checkpoint.step.assign_add(1)
-          # TODO: add summary_step?
-          with tf.summary.record_if(i == 0):
-            loss = train_step(data_dict)
-          losses.append(loss.numpy())
-        train_average_loss = np.mean(losses)
-        tf.summary.scalar('loss', train_average_loss)
+    self.strategy.run(fn, args=(inputs,))
 
-      losses = []
-      preds = []
-      trues = []
-      lengths = []
-      with summary_writer['valid'].as_default():
-        for (i, data_dict) in enumerate(feeder.valid):
-          with tf.summary.record_if(i == 0):
-            loss, logit, y_true, mask, length = test_step(data_dict)                    # logit [B, L, L]
-          losses.append(loss.numpy())
+  @tf.function(experimental_relax_shapes=True)
+  def _test_step(self, inputs: Dict[str, tf.Tensor]) -> List[tf.Tensor]:
+    """Perform a distributed testing step."""
 
-          preds.extend([np.multiply(convert_contact_map(x), y) for x, y in zip(logit.numpy(), mask.numpy())])
-          trues.extend([x for x in y_true.numpy()])                       # list of array(N, N)
-          lengths.extend([x for x in length.numpy()])
+    def fn(inp):
+      """Replicated testing step."""
 
-        valid_average_loss = np.mean(losses)
-        tf.summary.scalar('loss', valid_average_loss)
+      logits = self.model(inp)
+      per_example_loss = self.loss_fn(inp['contact_map'], logits, inp['mask_2d'], self._pos_weight)
+      self._valid_loss_metric.update_state(per_example_loss)
+      return logits
 
-        results = evaluation_metrics(preds, trues, lengths)
-        log_results(results)
+    pr_logit = self.strategy.run(fn, args=(inputs,))
+    #TODO: add metrics (f1, recall ...)
 
-      print("Epoch: {} | train average loss: {:.3f} | time: {:.2f}s | valid average loss: {:.3f})".format(
-          epoch, train_average_loss, time.time() - start, valid_average_loss))
+    return [self.strategy.gather(pr_logit, axis=0),
+            self.strategy.gather(inputs['contact_map'], axis=0),
+            self.strategy.gather(inputs['mask_2d'], axis=0),
+            self.strategy.gather(inputs['protein_length'], axis=0)]
 
-      if epoch % hp['checkpoint_inteval'] == 0:
-        save_path = checkpoint_manager.save()
-        print("Saved checkpoint for epoch {}: {}".format(epoch, save_path))
+  def run_train_epoch(self, dataset) -> tf.Tensor:
+    self._checkpoint_manager.checkpoint.epoch.assign_add(1)
+    for (i, batch) in enumerate(dataset):
+      self._train_step(batch)
+
+    return self._train_loss_metric.result()
+
+  def run_test_epoch(self, dataset) -> List[tf.Tensor]:
+    preds = []
+    trues = []
+    lengths = []
+    for (i, batch) in enumerate(dataset):
+      logit, y_true, mask, length = self._test_step(batch)
+
+      preds.extend([np.multiply(convert_contact_map(x), y) for x, y in zip(logit.numpy(), mask.numpy())])
+      trues.extend([x for x in y_true.numpy()])                       # list of array(N, N)
+      lengths.extend([x for x in length.numpy()])
+
+    return self._valid_loss_metric.result(), preds, trues, lengths
+
+  def summarize_metrics(self, results: Dict, epoch: int) -> None:
+    """
+      NOTE: 1. Call this function within the scope of a tf.summary.SummaryWriter
+      Args:
+        results: a python dict with three keys: ['short', 'medium', 'long'], and each key
+        has a list of float values representing: [precision, recall, f1, aupr, precision_L, precision_L_2, precision_L_5]
+    """
+    tf.summary.experimental.set_step(epoch)
+    with self._train_summary_writer.as_default():
+      tf.summary.scalar('loss', self._train_loss_metric.result())
+
+    with self._valid_summary_writer.as_default():
+      tf.summary.scalar('loss', self._valid_loss_metric.result())
+
+      for k, v in results.items():
+        tf.summary.scalar('precision/' + k, v[0])
+        tf.summary.scalar('recall/' + k, v[1])
+        tf.summary.scalar('f1/' + k, v[2])
+        tf.summary.scalar('aupr/' + k, v[3])
+        tf.summary.scalar('precision_L/' + k, v[4])
+        tf.summary.scalar('precision_L_2/' + k, v[5])
+        tf.summary.scalar('precision_L_5/' + k, v[6])
+
+    self.reset_metrics()
+
+  def reset_metrics(self) -> None:
+    self._train_loss_metric.reset_state()
+    self._valid_loss_metric.reset_state()
+
+  def restore_checkpoint(self, ckpt_path=None) -> int:
+    if ckpt_path is None:
+      ckpt_path = self.i_checkpoint_manager.last_checkpoint
+    self._checkpoint_manager.checkpoint.restore(ckpt_path).assert_existing_objects_matched()
+    print("Checkpoint restored from {}.".format(ckpt_path))
+    return int(self._checkpoint_manager.checkpoint.epoch.numpy())
+
+  def save_checkpoint(self, epoch: int) -> None:
+    saved_path = self._checkpoint_manager.save()
+    print("Saved checkpoint for epoch {}: {}".format(epoch, saved_path))
