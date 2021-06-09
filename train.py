@@ -8,15 +8,15 @@ from evaluate_metric import evaluation_metrics
 
 
 class masked_weighted_cross_entropy(tf.keras.losses.Loss):
-  def __init__(self, range_weighted_matrix: np.ndarray):
-    super().__init__(self)
-    self._range_weighted_matrix = tf.constant(range_weighted_matrix)
+  def __init__(self, range_weighted_matrix: np.ndarray, **kwargs):
+    self._range_weighted_matrix = tf.constant(range_weighted_matrix, dtype=tf.float32)
+    super().__init__(**kwargs)
 
   def __call__(self, y_true: tf.Tensor, logit: tf.Tensor, mask: tf.Tensor, pos_weight: int = 1):
     loss = tf.nn.weighted_cross_entropy_with_logits(y_true, logit, pos_weight=pos_weight)
     masked_loss = tf.multiply(loss, mask)
     length = tf.shape(loss)[1]
-    weighted_loss = tf.multiply(masked_loss, self.range_weighted_matix[: length, : length])
+    weighted_loss = tf.multiply(masked_loss, self._range_weighted_matrix[: length, : length])
     return tf.reduce_sum(weighted_loss, axis=[1, 2])
 
 
@@ -52,7 +52,10 @@ class Train():
 
     self.model = model
     self.optimizer = optimizer
-    self.loss_fn = masked_weighted_cross_entropy(get_range_weighted_matrix(hp['range_weights'], hp['max_protein_length']))
+    self.loss_fn = masked_weighted_cross_entropy(
+        get_range_weighted_matrix(hp['range_weights'], hp['max_protein_length']),
+        reduction=tf.keras.losses.Reduction.NONE,
+        name='masked_weighted_cross_entropy')
     self.strategy = strategy
 
     self._train_loss_metric = tf.keras.metrics.Mean(name='train_loss')
