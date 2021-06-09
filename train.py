@@ -127,14 +127,14 @@ class Train():
             self.strategy.gather(inputs['contact_map'], axis=0),
             self.strategy.gather(inputs['protein_length'], axis=0)]
 
-  def run_train_epoch(self, dataset) -> tf.Tensor:
+  def run_train_epoch(self, dataset: tf.data.Dataset) -> tf.Tensor:
     self._checkpoint_manager.checkpoint.epoch.assign_add(1)
     for (i, batch) in enumerate(dataset):
       self._train_step(batch)
 
     return self._train_loss_metric.result()
 
-  def run_test_epoch(self, dataset) -> List[tf.Tensor]:
+  def run_test_epoch(self, dataset: tf.data.Dataset) -> List[Any]:
     preds = []
     trues = []
     lengths = []
