@@ -9,8 +9,8 @@ from layers import AAEmbedding, BiLSTM, DenseConv, ResidualBlock
 
 
 class ConvModel(K.Model):
-  def __init__(self, hparams: Dict):
-    super().__init__()
+  def __init__(self, hparams: Dict, name='MLPConv'):
+    super().__init__(name=name)
     hp = hparams
 
     self.encoder = K.Sequential(name='encoder')
@@ -42,8 +42,8 @@ class ConvModel(K.Model):
 
 
 class Resnet(K.Model):
-  def __init__(self, hparams: Dict):
-    super().__init__()
+  def __init__(self, hparams: Dict, name='Resnet'):
+    super().__init__(name=name)
     hp = hparams
 
     self.encoder = K.Sequential(name='encoder')

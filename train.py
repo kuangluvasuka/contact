@@ -84,7 +84,8 @@ class Train():
                                      step=tf.Variable(1),
                                      model=self.model,
                                      optimizer=self.optimizer)
-    self._checkpoint_manager = tf.train.CheckpointManager(checkpoint, ckpt_dir, max_to_keep=5)
+    self._checkpoint_manager = tf.train.CheckpointManager(
+        checkpoint, ckpt_dir, max_to_keep=5, checkpoint_name=self.model.name)
 
   @tf.function(experimental_relax_shapes=True)
   def _train_step(self, inputs: Dict[str, tf.Tensor]) -> None:

@@ -10,9 +10,10 @@ class AAEmbedding(K.layers.Layer):
                units: int,
                vocab_size: int,
                embedding_dim: int,
-               activation: Callable[[tf.Tensor], tf.Tensor] = tf.nn.relu):
+               activation: Callable[[tf.Tensor], tf.Tensor] = tf.nn.relu,
+               name='AAEmbedding'):
 
-    super().__init__()
+    super().__init__(name=name)
 
     self.embed_mat = tf.Variable(tf.random.normal([vocab_size, embedding_dim]))
 
@@ -42,7 +43,8 @@ class BiLSTM(K.layers.Layer):
   def __init__(self,
                units: int,
                num_stacks: int,
-               bidirectional: bool):
+               bidirectional: bool,
+               name='BiLSTM'):
     """
       Args:
         units: int, dimensionality of the output tensor
@@ -54,7 +56,7 @@ class BiLSTM(K.layers.Layer):
       Output:
         h: vectors in shape=[B, L, units]
     """
-    super().__init__()
+    super().__init__(name=name)
 
     lstm_cells = []
     for _ in range(num_stacks):
@@ -92,7 +94,8 @@ class DenseConv(K.layers.Layer):
   def __init__(self,
                fc_dims: List[int],
                filters: int,
-               kernel_size: int):
+               kernel_size: int,
+               name='DenseConv'):
     """
       Args:
         fc_hidden_dim: List[int], dimensions of the output of the fully-connected layers
@@ -105,7 +108,7 @@ class DenseConv(K.layers.Layer):
         h: shape=[B, L, L, 1]
     """
 
-    super().__init__()
+    super().__init__(name=name)
 
     self._num_fc_layers = len(fc_dims)
 
@@ -132,8 +135,9 @@ class ResidualBlock(K.layers.Layer):
                layer_norm: bool = False,
                resize_shortcut: bool = False,
                activation: str = 'leaky_relu',
-               drop_rate: float = 0.):
-    super().__init__()
+               drop_rate: float = 0.,
+               name='ResidualBlock'):
+    super().__init__(name=name)
 
     if layer_norm:
       self.layer_norm = K.layers.LayerNormalization(axis=-1)
