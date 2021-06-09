@@ -185,5 +185,5 @@ class Train():
     return int(self._checkpoint_manager.checkpoint.epoch.numpy())
 
   def save_checkpoint(self, epoch: int) -> None:
-    saved_path = self._checkpoint_manager.save()
+    saved_path = self._checkpoint_manager.save(checkpoint_number=epoch)
     print("Saved checkpoint for epoch {}: {}".format(epoch, saved_path))
