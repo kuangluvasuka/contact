@@ -4,7 +4,7 @@ import numpy as np
 import tensorflow as tf
 
 from utils import time_string
-from evaluate_metric import convert_contact_map, evaluation_metrics
+from evaluate_metric import evaluation_metrics
 
 
 # TODO: refacor this function by subclassing tf.keras.losses.Loss!!!!!!!
@@ -47,7 +47,8 @@ def evaluate(model: tf.keras.Model, test_loader: tf.data.Dataset):
   lengths = []
   for (i, data_dict) in enumerate(test_loader):
     logits = model(data_dict)
-    preds = [np.multiply(convert_contact_map(x), y) for x, y in zip(logits.numpy(), data_dict['mask_2d'].numpy())]
+    pred = tf.multiply(tf.sigmoid(logits), data_dict['mask_2d'])
+    preds = [x for x in pred.numpy()]
     trues = [x for x in data_dict['contact_map'].numpy()]    # convert from array(B, N, N) to list of arr(N, N)
     length = [x for x in data_dict['protein_length'].numpy()]
 
