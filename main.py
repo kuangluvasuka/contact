@@ -34,9 +34,9 @@ def main():
   # logical_gpus = tf.config.list_logical_devices('GPU')
   # print(len(logical_gpus), "Logical GPUs")
 
-  # load params
+  # load hyper parameters
   with open('./params.yaml') as f:
-      params = yaml.safe_load(f)
+    params = yaml.safe_load(f)
   params['vocab_size'] = len(PFAM_VOCAB)
   #params['resume_training'] = True
 
@@ -84,7 +84,6 @@ def main():
       valid_loss, preds, trues, lengths = train_obj.run_test_epoch(feeder.valid)
 
       results = evaluation_metrics(preds, trues, lengths)
-
       train_obj.summarize_metrics(results, epoch)
 
       print("Epoch: {} | train average loss: {:.3f} | time: {:.2f}s | valid average loss: {:.3f})".format(
