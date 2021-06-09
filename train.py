@@ -131,14 +131,14 @@ class Train():
       logits = self.model(inp)
       per_example_loss = self.loss_fn(inp['contact_map'], logits, inp['mask_2d'], self._pos_weight)
       self._valid_loss_metric.update_state(per_example_loss)
-      return logits
+      pred = tf.multiply(tf.sigmoid(logits), inp['mask_2d'])
+      return pred
 
-    pr_logit = self.strategy.run(fn, args=(inputs,))
+    pred = self.strategy.run(fn, args=(inputs,))
     #TODO: add metrics (f1, recall ...)
 
-    return [self.strategy.gather(pr_logit, axis=0),
+    return [self.strategy.gather(pred, axis=0),
             self.strategy.gather(inputs['contact_map'], axis=0),
-            self.strategy.gather(inputs['mask_2d'], axis=0),
             self.strategy.gather(inputs['protein_length'], axis=0)]
 
   def run_train_epoch(self, dataset) -> tf.Tensor:
@@ -153,10 +153,10 @@ class Train():
     trues = []
     lengths = []
     for (i, batch) in enumerate(dataset):
-      logit, y_true, mask, length = self._test_step(batch)
+      pred, true, length = self._test_step(batch)
 
-      preds.extend([np.multiply(convert_contact_map(x), y) for x, y in zip(logit.numpy(), mask.numpy())])
-      trues.extend([x for x in y_true.numpy()])                       # list of array(N, N)
+      preds.extend([x for x in pred.numpy()])
+      trues.extend([x for x in true.numpy()])                       # list of array(N, N)
       lengths.extend([x for x in length.numpy()])
 
     return self._valid_loss_metric.result(), preds, trues, lengths

@@ -4,9 +4,26 @@ from absl import app
 import tensorflow as tf
 
 
-def config_gpu():
-  pass
+def gpu_config() -> bool:
+  """GPU configuration. Return True if multiple GPUs found."""
 
+  gpus = tf.config.list_physical_devices('GPU')
+  try:
+    for gpu in gpus:
+      tf.config.experimental.set_memory_growth(gpu, True)
+    logical_gpus = tf.config.list_logical_devices('GPU')
+    print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
+  except RuntimeError as e:
+    print(e)
+
+  ## uncomment this block to simulate multiple GPUs on a singe GPU
+  # gpus = tf.config.list_physical_devices('GPU')
+  # tf.config.set_logical_device_configuration(gpus[0],
+  #                                            [tf.config.LogicalDeviceConfiguration(memory_limit=10240),
+  #                                             tf.config.LogicalDeviceConfiguration(memory_limit=10240)])
+  # logical_gpus = tf.config.list_logical_devices('GPU')
+  # print(len(logical_gpus), "Logical GPUs")
+  return len(gpus) > 1
 
 
 def main():
@@ -18,35 +35,19 @@ def main():
   from train import Train
   from evaluate_metric import evaluation_metrics
 
-  gpus = tf.config.list_physical_devices('GPU')
-  try:
-    for gpu in gpus:
-      tf.config.experimental.set_memory_growth(gpu, True)
-    logical_gpus = tf.config.list_logical_devices('GPU')
-    print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
-  except RuntimeError as e:
-    print(e)
-
-  # gpus = tf.config.list_physical_devices('GPU')
-  # tf.config.set_logical_device_configuration(gpus[0],
-  #                                            [tf.config.LogicalDeviceConfiguration(memory_limit=10240),
-  #                                             tf.config.LogicalDeviceConfiguration(memory_limit=10240)])
-  # logical_gpus = tf.config.list_logical_devices('GPU')
-  # print(len(logical_gpus), "Logical GPUs")
-
-  # load hyper parameters
+  # Load hyper parameters
   with open('./params.yaml') as f:
     params = yaml.safe_load(f)
   params['vocab_size'] = len(PFAM_VOCAB)
   #params['resume_training'] = True
 
-  # Initializing model
-  if len(logical_gpus) > 1:
+  # Setup distributed system
+  if gpu_config():
     strategy = tf.distribute.MirroredStrategy()
   else:
     strategy = tf.distribute.get_strategy()
 
-  # load pretrained embedding
+  # Load pretrained embedding and dataset
   embedding = None
   if params['use_pretrain']:
     import pickle
@@ -63,6 +64,7 @@ def main():
                   max_protein_length=params['max_protein_length'])
   del embedding
 
+  # Initialize model and trainer
   with strategy.scope():
     model = ConvModel(params)
     optimizer = tf.optimizers.Adam(learning_rate=params['learning_rate'])
