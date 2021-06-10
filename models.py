@@ -30,6 +30,15 @@ class ConvModel(K.Model):
       x_mul = tf.math.multiply(x_expand_1, x_expand_2)
       return tf.concat([x_abs, x_mul], axis=-1)         # [B, L, L, 2dim
 
+    #TODO: delete one of the pairing func
+    def concat_pairs(tensor):
+      seqlen = tf.shape(tensor)[1]
+      input_left = tf.tile(tensor[:, :, None], (1, 1, seqlen, 1))
+      input_right = tf.tile(tensor[:, None, :], (1, seqlen, 1, 1))
+      output = tf.concat((input_left, input_right), -1)
+      return output
+
+
     self.decoder = K.Sequential(name='decoder')
     self.decoder.add(K.layers.Lambda(sequence_to_map))
     self.decoder.add(DenseConv(hp['fc_dims'], hp['filters'], hp['kernel_size'], hp['pool_size']))
@@ -61,6 +70,15 @@ class Resnet(K.Model):
       x_abs = tf.math.abs(x_expand_1 - x_expand_2)
       x_mul = tf.math.multiply(x_expand_1, x_expand_2)
       return tf.concat([x_abs, x_mul], axis=-1)
+
+    #TODO: delete one of the pairing func
+    def concat_pairs(tensor):
+      seqlen = tf.shape(tensor)[1]
+      input_left = tf.tile(tensor[:, :, None], (1, 1, seqlen, 1))
+      input_right = tf.tile(tensor[:, None, :], (1, seqlen, 1, 1))
+      output = tf.concat((input_left, input_right), -1)
+      return output
+
 
     self.decoder = K.Sequential(name='decoder')
     self.decoder.add(K.layers.Lambda(sequence_to_map))
