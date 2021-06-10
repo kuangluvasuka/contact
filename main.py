@@ -32,7 +32,7 @@ def main():
   from data_utils.vocabs import PFAM_VOCAB
   from feeder import Feeder
   from models import ConvModel, Resnet
-  from train import Train
+  from train import Train, evaluate
   from evaluate_metric import evaluation_metrics
 
   # Load hyper parameters
@@ -51,7 +51,7 @@ def main():
   embedding = None
   if params['use_pretrain']:
     import pickle
-    embedding = pickle.load(open(params['pretrained_file'], 'rb'))  
+    embedding = pickle.load(open(params['pretrained_file'], 'rb'))
 
   feeder = Feeder(params['data_folder'],
                   params['batch_size'],
@@ -90,6 +90,10 @@ def main():
 
       print("Epoch: {} | train average loss: {:.3f} | time: {:.2f}s | valid average loss: {:.3f})".format(
           epoch, train_loss.numpy(), time.time() - start, valid_loss.numpy()))
+
+      if epoch % params['evaluate_inteval'] == 0:
+        test_metrics, test_preds, test_trues, ids = evaluate(model, feeder.test)
+        train_obj.visualize_predictions(test_preds, test_trues, ids)
 
       if epoch % params['checkpoint_inteval'] == 0:
         train_obj.save_checkpoint(epoch)

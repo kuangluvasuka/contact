@@ -24,21 +24,19 @@ def evaluate(model: tf.keras.Model, test_loader: tf.data.Dataset):
 
   #TODO: check if dataset is test set
 
-  contact_preds = []
-  contact_trues = []
+  preds = []
+  trues = []
   lengths = []
+  ids = []
   for (i, data_dict) in enumerate(test_loader):
     logits = model(data_dict)
     pred = tf.multiply(tf.sigmoid(logits), data_dict['mask_2d'])
-    preds = [x for x in pred.numpy()]
-    trues = [x for x in data_dict['contact_map'].numpy()]    # convert from array(B, N, N) to list of arr(N, N)
-    length = [x for x in data_dict['protein_length'].numpy()]
+    preds.extend([x for x in pred.numpy()])
+    trues.extend([x for x in data_dict['contact_map'].numpy()])
+    lengths.extend([x for x in data_dict['protein_length'].numpy()])
+    ids.extend([x for x in data_dict['id'].numpy()])
 
-    contact_preds.extend(preds)
-    contact_trues.extend(trues)
-    lengths.extend(length)
-
-  return evaluation_metrics(contact_preds, contact_trues, lengths), contact_preds, contact_trues
+  return evaluation_metrics(preds, trues, lengths), preds, trues, ids
 
 
 class Train():
@@ -176,6 +174,41 @@ class Train():
   def reset_metrics(self) -> None:
     self._train_loss_metric.reset_state()
     self._valid_loss_metric.reset_state()
+
+  def visualize_predictions(self, preds: List[np.ndarray], trues: List[np.ndarray], ids: List[str]) -> None:
+    """Create images of (prediction, true) pairs and save by tf.summary for visualization in Tensorboard."""
+
+    import io
+    import matplotlib.pyplot as plt
+    plt.ioff()
+
+    num = len(preds)
+    pairs_per_row = 2
+    rows = np.ceil(num / pairs_per_row)
+    pairs = list(zip(preds, trues))
+
+    def image_grid():
+      figure = plt.figure(figsize=(20, 20))
+      for i in range(num * 2):
+        plt.subplot(rows, pairs_per_row * 2, i + 1, title=ids[i // 2])
+        plt.xticks([])
+        plt.yticks([])
+        plt.grid(False)
+        plt.imshow(pairs[i // 2][i % 2])
+      return figure
+
+    def plot_to_image(fig):
+      buf = io.BytesIO()
+      plt.savefig(buf, format='png')
+      plt.close(fig)
+      buf.seek(0)
+      image = tf.image.decode_png(buf.getvalue(), channels=1)
+      image = tf.expand_dims(image, 0)
+      return image
+
+    figure = image_grid()
+    with self._valid_summary_writer.as_default():
+      tf.summary.image('testset_visualization', plot_to_image(figure))
 
   def restore_checkpoint(self, ckpt_path=None) -> int:
     if ckpt_path is None:

@@ -30,5 +30,6 @@ epochs: 200
 
 checkpoint_dir: './checkpoints'
 checkpoint_inteval: 20
+evaluate_inteval: 10
 resume_training: False
 summary_dir: './tf_logs'
