@@ -20,9 +20,10 @@ lstm_stacks: 2
 bidirectional: True
 
 
-fc_dims: [32, 20]
-filters: 1
-kernel_size: 7
+fc_dims: [64, 32]
+filters: [16, 1]
+kernel_size: [9, 5]
+pool_size: 2
 
 learning_rate: 1.0e-3
 epochs: 200

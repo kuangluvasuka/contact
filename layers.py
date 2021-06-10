@@ -93,14 +93,16 @@ class BiLSTM(K.layers.Layer):
 class DenseConv(K.layers.Layer):
   def __init__(self,
                fc_dims: List[int],
-               filters: int,
-               kernel_size: int,
+               filters: List[int],
+               kernel_size: List[int],
+               pool_size: int,
                name='DenseConv'):
     """
       Args:
         fc_hidden_dim: List[int], dimensions of the output of the fully-connected layers
-        filters: int, dimension of the output space
-        kernel_size: int, size of the 2D convolution filters
+        filters: List[int], number of filters for two convolutional layers
+        kernel_size: List[int], sizes of the 2D convolution filters
+        pool_size: int, size of pooling filters
 
       Input:
         x: shape=[B, L, dim]
@@ -116,7 +118,9 @@ class DenseConv(K.layers.Layer):
     for i in range(self._num_fc_layers - 1):
       self.fc.append(K.layers.Dense(fc_dims[i], activation='relu'))
     self.fc.append(K.layers.Dense(fc_dims[-1]))
-    self.conv = K.layers.Conv2D(filters, kernel_size, padding='same')
+    self.conv1 = K.layers.Conv2D(filters[0], kernel_size[0], padding='same', activation='relu')
+    self.pool1 = K.layers.MaxPooling2D(pool_size=(pool_size, pool_size), strides=1, padding='same')
+    self.conv2 = K.layers.Conv2D(filters[1], kernel_size[1], padding='same')
 
   def call(self, x: tf.Tensor) -> tf.Tensor:
     fc_hidden = [x]
@@ -124,7 +128,9 @@ class DenseConv(K.layers.Layer):
       h = self.fc[i](fc_hidden[-1])
       fc_hidden.append(h)                             # fc_hidden[-1] = [B, L, L, H]
 
-    return self.conv(fc_hidden[-1])
+    conv1 = self.conv1(fc_hidden[-1])
+    pool1 = self.pool1(conv1)
+    return self.conv2(pool1)
 
 
 class ResidualBlock(K.layers.Layer):

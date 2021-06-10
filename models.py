@@ -32,7 +32,7 @@ class ConvModel(K.Model):
 
     self.decoder = K.Sequential(name='decoder')
     self.decoder.add(K.layers.Lambda(sequence_to_map))
-    self.decoder.add(DenseConv(hp['fc_dims'], hp['filters'], hp['kernel_size']))
+    self.decoder.add(DenseConv(hp['fc_dims'], hp['filters'], hp['kernel_size'], hp['pool_size']))
 
   def call(self, inputs: Dict[str, tf.Tensor], training=False) -> tf.Tensor:
     encoded_seq = self.encoder(inputs[self._input_source])
