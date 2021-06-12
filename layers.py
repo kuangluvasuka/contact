@@ -143,7 +143,8 @@ class ResidualBlock(K.layers.Layer):
                activation: str = 'leaky_relu',
                drop_rate: float = 0.,
                name='ResidualBlock'):
-    super().__init__(name=name)
+    #super().__init__(name=name)
+    super().__init__()
 
     if layer_norm:
       self.layer_norm = K.layers.LayerNormalization(axis=-1)
