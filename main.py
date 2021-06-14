@@ -26,7 +26,7 @@ def gpu_config() -> bool:
   return len(gpus) > 1
 
 
-def main():
+def main(argv):
 
   from data_utils.proteinnet_serializer import deserialize_proteinnet_sequence
   from data_utils.vocabs import PFAM_VOCAB
@@ -101,3 +101,4 @@ def main():
 
 if __name__ == '__main__':
   app.run(main)
+
