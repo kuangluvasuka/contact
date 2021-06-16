@@ -4,6 +4,7 @@ import tensorflow as tf
 import tensorflow.keras as K
 
 
+# TODO: redifine embedding and BiLSTM layer
 class AAEmbedding(K.layers.Layer):
   """Embedding of amino acids."""
   def __init__(self,
@@ -15,14 +16,8 @@ class AAEmbedding(K.layers.Layer):
 
     super().__init__(name=name)
 
+    self._vocab_size = vocab_size
     self.embed_mat = tf.Variable(tf.random.normal([vocab_size, embedding_dim]))
-
-    # initialize transformation weights
-    self.weight_emb = tf.Variable(tf.random.normal([embedding_dim, units]))
-    self.weight_onehot = tf.Variable(tf.random.normal([vocab_size, units]))
-    self.bias = tf.Variable(tf.random.normal([1, units]))
-
-    self.act = activation
 
   def get_embedding_shape(self) -> tf.TensorShape:
     return self.embed_mat.shape
@@ -31,12 +26,11 @@ class AAEmbedding(K.layers.Layer):
     return tf.nn.embedding_lookup(self.embed_mat, x)
 
   def call(self, x: tf.Tensor) -> tf.Tensor:
-    h_emb = tf.matmul(self.get_embedding(x), self.weight_emb)
-    h_onehot = tf.nn.embedding_lookup(self.weight_onehot, x)
+    h_emb = self.get_embedding(x)
+    h_onehot = tf.one_hot(x, depth=self._vocab_size)
 
-    # TODO: concatenate?
-    h_out = h_emb + h_onehot + self.bias
-    return self.act(h_out)
+    h_out = tf.concat([h_emb, h_onehot], axis=-1)
+    return h_out
 
 
 class BiLSTM(K.layers.Layer):
@@ -58,19 +52,14 @@ class BiLSTM(K.layers.Layer):
     """
     super().__init__(name=name)
 
-    lstm_cells = []
-    for _ in range(num_stacks):
-      lstm_cells.append(K.layers.LSTMCell(units))
-    stacked_lstm = K.layers.StackedRNNCells(lstm_cells)
-
     if bidirectional:
       forward_layer = K.layers.RNN(
-          stacked_lstm,
+          K.layers.StackedRNNCells([K.layers.LSTMCell(units) for _ in range(num_stacks)]),
           return_sequences=True,
           return_state=False,
           time_major=False)
       backward_layer = K.layers.RNN(
-          stacked_lstm,
+          K.layers.StackedRNNCells([K.layers.LSTMCell(units) for _ in range(num_stacks)]),
           return_sequences=True,
           return_state=False,
           time_major=False,
@@ -78,15 +67,14 @@ class BiLSTM(K.layers.Layer):
       self.lstm = K.layers.Bidirectional(
           forward_layer,
           backward_layer=backward_layer,
-          merge_mode=None)
+          merge_mode='concat')
     else:
-      self.lstm = K.layers.RNN(stacked_lstm)
+      self.lstm = K.layers.RNN(K.layers.StackedRNNCells([K.layers.LSTMCell(units) for _ in range(num_stacks)]))
 
     self.linear = K.layers.Dense(units)
 
   def call(self, x: tf.Tensor) -> tf.Tensor:
-    [forward, backward] = self.lstm(x)
-    h = tf.concat([forward, backward], axis=-1)
+    h = self.lstm(x)
     return self.linear(h)
 
 
