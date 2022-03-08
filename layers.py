@@ -179,3 +179,45 @@ class ResidualBlock(K.layers.Layer):
 
     return self.act2(x)
 
+
+class GraphBlock(K.layers.Layer):
+  """
+    Single layer of graph neural networks that updates edge/node hidden representations.
+
+  """
+  def __init__(self,
+               dim_e: int,
+               dim_h: int, 
+               name='GraphBlock'):
+    super().__init__()
+    # NOTE: dim_e = 2 * dim_h
+    self.w_e1 = K.layers.Dense(dim_e, activation='relu')
+    self.w_e2 = K.layers.Dense(dim_h, activation='relu')
+    self.w_e3 = K.layers.Dense(dim_h, activation='relu')
+
+    self.w_h1 = K.layers.Dense(dim_h, activation='relu')
+    self.w_h2 = K.layers.Dense(dim_h, activation='relu')
+
+  def call(self, inputs: Tuple[tf.Tensor, tf.Tensor], training: bool = False):
+    """
+      Args:
+        inputs[0]: edge feature (coarse map), [B, L, L, edge_dim]
+        inputs[1]: node feature (AA encoding), [B, L, node_dim]
+
+      Returns:
+        new edge feature [B, L, L, edge_dim]
+        new node feature [B, L, node_dim]
+    """
+    e, h = inputs
+
+    seq_len = tf.shape(h)[1]
+    h_u = tf.tile(tf.expand_dims(h, axis=1), [1, seq_len, 1, 1])        # [B, 1, L, dim]
+    h_v = tf.tile(tf.expand_dims(h, axis=2), [1, 1, seq_len, 1])        # [B, L, 1, dim]
+    h_concat = tf.concat([h_u, h_v], -1)                                # [B, L, 1, 2dim]
+    e_t = self.w_e1(tf.concat([self.w_e2(e), self.w_e3(h_concat)], -1))  # [B, L, L 2dim]
+
+    e_t_mean = tf.reduce_mean(e_t, axis=2)                              # [B, L, 2dim]
+    h_t = self.w_h1(tf.concat([self.w_h2(h), e_t_mean], -1))            # [B, L, dim]
+    return [e_t, h_t]
+
+

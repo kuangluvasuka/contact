@@ -2,7 +2,7 @@ from typing import Dict
 import tensorflow as tf
 import tensorflow.keras as K
 
-from layers import AAEmbedding, BiLSTM, DenseConv, ResidualBlock
+from layers import AAEmbedding, BiLSTM, DenseConv, ResidualBlock, GraphBlock
 
 
 #TODO: base class?
@@ -93,9 +93,48 @@ class Resnet(K.Model):
     #TODO: add weight normalization?
     self.decoder.add(K.layers.Dense(1))
 
-  def call(self, inputs, training=False):
+  def call(self, inputs: Dict[str, tf.Tensor], training=False):
     encoded_seq = self.encoder(inputs[self._input_source])
     asymmetric_map = self.decoder(encoded_seq, training=training)
     contact_map_logit = (asymmetric_map + tf.transpose(asymmetric_map, (0, 2, 1, 3))) / 2
     return tf.squeeze(contact_map_logit, axis=3)
 
+
+class GraphModel(K.Model):
+  def __init__(self, hparams: Dict, name='Graph'):
+    super().__init__(name=name)
+    hp = hparams
+
+    self.encoder = K.Sequential(name='encoder')
+    if hp['use_pretrain']:
+      self.encoder.add(K.layers.LayerNormalization(axis=-1))
+      self._input_source = 'pretrained_sequence'
+    else:
+      self.encoder.add(AAEmbedding(hp['embedding_units'], hp['vocab_size'], embedding_dim=hp['embedding_dim']))
+      self.encoder.add(BiLSTM(hp['lstm_units'], hp['lstm_stacks'], hp['bidirectional']))
+      self._input_source = 'primary'
+
+    def sequence_to_map(x: tf.Tensor):
+      x_expand_1 = tf.expand_dims(x, axis=1)
+      x_expand_2 = tf.expand_dims(x, axis=2)
+      x_abs = tf.math.abs(x_expand_1 - x_expand_2)
+      x_mul = tf.math.multiply(x_expand_1, x_expand_2)
+      return [tf.concat([x_abs, x_mul], axis=-1), x]
+
+    # multi-in/output not available for Sequential
+    self.s2m_layer = K.layers.Lambda(sequence_to_map)
+
+    self.graph_layers = []
+    self.graph_layers.append(GraphBlock(2 * hp['lstm_units'], hp['lstm_units']))
+    self.graph_layers.append(GraphBlock(2 * hp['lstm_units'], hp['lstm_units']))
+    self.linear = K.layers.Dense(1)
+
+  def call(self, inputs: Dict[str, tf.Tensor], training=False):
+    encoded_seq = self.encoder(inputs[self._input_source])
+    hidden_inputs = []
+    hidden_inputs.append(self.s2m_layer(encoded_seq))
+    for graph in self.graph_layers:
+      hidden_inputs.append(graph(hidden_inputs[-1]))
+    asymmetric_map = self.linear(hidden_inputs[-1][0])
+    contact_map_logit = (asymmetric_map + tf.transpose(asymmetric_map, (0, 2, 1, 3))) / 2
+    return tf.squeeze(contact_map_logit, axis=3)
