@@ -121,7 +121,7 @@ class GraphModel(K.Model):
       x_mul = tf.math.multiply(x_expand_1, x_expand_2)
       return [tf.concat([x_abs, x_mul], axis=-1), x]
 
-    # multi-in/output not available for Sequential
+    # multi-in/output not available for Sequential, so use functional api
     self.s2m_layer = K.layers.Lambda(sequence_to_map)
 
     self.graph_layers = []
