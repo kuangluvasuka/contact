@@ -31,7 +31,7 @@ def main(argv):
   from data_utils.proteinnet_serializer import deserialize_proteinnet_sequence
   from data_utils.vocabs import PFAM_VOCAB
   from feeder import Feeder
-  from models import ConvModel, Resnet
+  from models import ConvModel, Resnet, GraphModel
   from train import Train, evaluate
   from evaluate_metric import evaluation_metrics
 
@@ -66,7 +66,7 @@ def main(argv):
 
   # Initialize model and trainer
   with strategy.scope():
-    model = ConvModel(params)
+    model = GraphModel(params)
     optimizer = tf.optimizers.Adam(learning_rate=params['learning_rate'])
     train_obj = Train(model, optimizer, strategy, params, params['summary_dir'], params['checkpoint_dir'])
 
